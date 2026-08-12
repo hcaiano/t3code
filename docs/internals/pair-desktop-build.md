@@ -35,8 +35,8 @@ The artifact is written to:
 release-pair/T3-Code-Pair-<version>-arm64.dmg
 ```
 
-Open the DMG and drag **T3 Code Pair (Nightly)** to **Applications**. The local build is unsigned,
-so use right-click, **Open** on the first launch.
+Open the DMG and drag **T3 Code Pair (Nightly)** to **Applications**. The local build uses an ad-hoc
+signature and is not notarized, so use right-click, **Open** if macOS blocks the first launch.
 
 ## Keep the Fork Current
 

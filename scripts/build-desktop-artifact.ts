@@ -1598,6 +1598,12 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       target: target === "dmg" ? [target, "zip"] : [target],
       icon: "icon.icns",
       category: "public.app-category.developer-tools",
+      ...(pairBuild
+        ? {
+            identity: "-",
+            hardenedRuntime: false,
+          }
+        : {}),
       protocols: [
         {
           name: pairBuild ? "T3 Code Pair" : "T3 Code",

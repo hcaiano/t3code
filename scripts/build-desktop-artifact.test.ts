@@ -385,6 +385,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.notProperty(config, "publish");
       assert.notProperty(mac, "entitlements");
       assert.notProperty(mac, "provisioningProfile");
+      assert.equal(mac.identity, "-");
+      assert.equal(mac.hardenedRuntime, false);
       assert.deepStrictEqual(mac.protocols, [{ name: "T3 Code Pair", schemes: ["t3code-pair"] }]);
     }).pipe(
       Effect.provide(
