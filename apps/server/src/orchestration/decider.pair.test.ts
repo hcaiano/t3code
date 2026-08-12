@@ -83,7 +83,14 @@ it.layer(NodeServices.layer)("Pair Session decider", (it) => {
           ),
         ),
       ).toBe(true);
-      expect(prompts.every((prompt) => !/herdr|peer_message|HERDR_ENV/i.test(prompt))).toBe(true);
+      expect(
+        prompts.every((prompt) =>
+          prompt.includes(
+            "Never read or invoke herdr-pair, Herdr tools, or another external collaboration skill or transport",
+          ),
+        ),
+      ).toBe(true);
+      expect(prompts.every((prompt) => !/peer_message|HERDR_ENV/i.test(prompt))).toBe(true);
     }),
   );
 

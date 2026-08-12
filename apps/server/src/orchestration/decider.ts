@@ -31,7 +31,7 @@ function pairInstruction(role: "lead" | "peer"): string {
     role === "lead"
       ? "You are the Lead for user updates. First, write a concise task and progress summary to the other T3 Code agent through the channel below."
       : "Another T3 Code agent is the Lead for user updates. Wait for its task summary through the channel below, then request any missing context there.";
-  return `${roleInstruction} You are equal collaborators; both may edit the shared workspace. T3 Code automatically delivers each complete <t3_agent_message>...</t3_agent_message> block to the other agent. Write all inter-agent context, delegation, reviews, and blockers directly in these blocks. The built-in channel is the complete transport; no setup or transport action is necessary.`;
+  return `${roleInstruction} You are equal collaborators; both may edit the shared workspace. T3 Code automatically delivers each complete <t3_agent_message>...</t3_agent_message> block to the other agent. Write all inter-agent context, delegation, reviews, and blockers directly in these blocks. The built-in channel is the complete transport; no setup or transport action is necessary. This is not a Herdr session. Never read or invoke herdr-pair, Herdr tools, or another external collaboration skill or transport for this session.`;
 }
 
 // Session adoption takes seconds; a user message still unadopted after this
