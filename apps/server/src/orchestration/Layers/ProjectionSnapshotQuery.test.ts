@@ -39,6 +39,51 @@ const projectionSnapshotLayer = it.layer(
 );
 
 projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
+  it.effect("hydrates internal Pair state only in the command read model", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`DELETE FROM projection_threads`;
+      yield* sql`DELETE FROM projection_projects`;
+      yield* sql`
+        INSERT INTO projection_projects (
+          project_id, title, workspace_root, default_model_selection_json,
+          scripts_json, created_at, updated_at, deleted_at
+        ) VALUES (
+          'pair-project', 'Pair Project', '/tmp/pair', NULL, '[]',
+          '2026-08-12T12:00:00.000Z', '2026-08-12T12:00:00.000Z', NULL
+        )
+      `;
+      yield* sql`
+        INSERT INTO projection_threads (
+          thread_id, project_id, title, model_selection_json, runtime_mode,
+          interaction_mode, branch, worktree_path, latest_turn_id, pair_session_json,
+          pair_state_json, latest_user_message_at, pending_approval_count,
+          pending_user_input_count, has_actionable_proposed_plan, created_at, updated_at,
+          deleted_at
+        ) VALUES (
+          'pair-lead', 'pair-project', 'Lead', '{"instanceId":"codex","model":"gpt-5"}',
+          'full-access', 'default', NULL, '/tmp/pair', NULL,
+          '{"id":"pair-1","leadThreadId":"pair-lead","peerThreadId":"pair-peer"}',
+          '{"pendingTurnMessageId":"message-1","pendingPeerMessageIds":["pair-1:message-1:0"]}',
+          NULL, 0, 0, 0, '2026-08-12T12:00:00.000Z', '2026-08-12T12:00:00.000Z', NULL
+        )
+      `;
+
+      const commandModel = yield* snapshotQuery.getCommandReadModel();
+      const shell = yield* snapshotQuery.getShellSnapshot();
+      const full = yield* snapshotQuery.getSnapshot();
+      assert.deepEqual(commandModel.threads[0]?.pairState, {
+        pendingTurnMessageId: asMessageId("message-1"),
+        pendingPeerMessageIds: ["pair-1:message-1:0"],
+      });
+      assert.isFalse("pairState" in (shell.threads[0] ?? {}));
+      assert.isFalse("pairState" in (full.threads[0] ?? {}));
+      yield* sql`DELETE FROM projection_threads WHERE thread_id = 'pair-lead'`;
+      yield* sql`DELETE FROM projection_projects WHERE project_id = 'pair-project'`;
+    }),
+  );
+
   it.effect("hydrates read model from projection tables and computes snapshot sequence", () =>
     Effect.gen(function* () {
       const snapshotQuery = yield* ProjectionSnapshotQuery;

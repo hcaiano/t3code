@@ -175,7 +175,7 @@ import {
   nextProjectScriptId,
   projectScriptIdFromCommand,
 } from "~/projectScripts";
-import { newDraftId, newMessageId, newThreadId } from "~/lib/utils";
+import { newDraftId, newMessageId, newThreadId, randomUUID } from "~/lib/utils";
 import { useBrowserHistoryStore } from "~/browserHistoryStore";
 import { getProviderModelCapabilities, resolveSelectableProvider } from "../providerModels";
 import { NO_PROVIDER_MODEL_SELECTION } from "../providerInstances";
@@ -250,6 +250,7 @@ import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { MessagesTimeline } from "./chat/MessagesTimeline";
 import { resolveTimelineIsAtEnd } from "./chat/MessagesTimeline.logic";
 import { ChatHeader } from "./chat/ChatHeader";
+import { PairSessionDialog } from "./chat/PairSessionDialog";
 import { PanelLayoutControls, RightPanelMaximizeControl } from "./chat/PanelLayoutControls";
 import { type ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { NoActiveThreadState } from "./NoActiveThreadState";
@@ -512,6 +513,9 @@ type ChatViewProps =
       onDiffPanelOpen?: () => void;
       reserveTitleBarControlInset?: boolean;
       forceExpandedMobileComposer?: boolean;
+      pairPaneActive?: boolean;
+      pairPaneRole?: "lead" | "peer";
+      onPairPaneActivate?: () => void;
       threadSyncPhase?: ThreadSyncPhase | null;
       routeKind: "server";
       draftId?: never;
@@ -522,6 +526,9 @@ type ChatViewProps =
       onDiffPanelOpen?: () => void;
       reserveTitleBarControlInset?: boolean;
       forceExpandedMobileComposer?: boolean;
+      pairPaneActive?: boolean;
+      pairPaneRole?: "lead" | "peer";
+      onPairPaneActivate?: () => void;
       threadSyncPhase?: never;
       routeKind: "draft";
       draftId: DraftId;
@@ -1192,6 +1199,9 @@ function ChatViewContent(props: ChatViewProps) {
     onDiffPanelOpen,
     reserveTitleBarControlInset = true,
     forceExpandedMobileComposer = false,
+    pairPaneActive = true,
+    pairPaneRole,
+    onPairPaneActivate,
   } = props;
   const draftId = routeKind === "draft" ? props.draftId : null;
   const threadSyncPhase = routeKind === "server" ? (props.threadSyncPhase ?? null) : null;
@@ -1211,6 +1221,12 @@ function ChatViewContent(props: ChatViewProps) {
   const closeTerminalMutation = useAtomCommand(terminalEnvironment.close, "terminal close");
   const createThread = useAtomCommand(threadEnvironment.create, { reportFailure: false });
   const deleteThread = useAtomCommand(threadEnvironment.delete, { reportFailure: false });
+  const startThreadPair = useAtomCommand(threadEnvironment.startPair, {
+    reportFailure: false,
+  });
+  const endThreadPair = useAtomCommand(threadEnvironment.endPair, {
+    reportFailure: false,
+  });
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
@@ -1332,7 +1348,8 @@ function ChatViewContent(props: ChatViewProps) {
   const composerTerminalContextsRef = useRef<TerminalContextDraft[]>([]);
   const composerElementContextsRef = useRef<ElementContextDraft[]>([]);
   const localComposerRef = useRef<ChatComposerHandle | null>(null);
-  const composerRef = useComposerHandleContext() ?? localComposerRef;
+  const sharedComposerRef = useComposerHandleContext();
+  const composerRef = pairPaneActive ? (sharedComposerRef ?? localComposerRef) : localComposerRef;
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [expandedImage, setExpandedImage] = useState<ExpandedImagePreview | null>(null);
   const [optimisticUserMessages, setOptimisticUserMessages] = useState<ChatMessage[]>([]);
@@ -1346,6 +1363,8 @@ function ChatViewContent(props: ChatViewProps) {
   >({});
   const [isConnecting, _setIsConnecting] = useState(false);
   const [isRevertingCheckpoint, setIsRevertingCheckpoint] = useState(false);
+  const [pairDialogOpen, setPairDialogOpen] = useState(false);
+  const [pairMutationPending, setPairMutationPending] = useState(false);
   const [maximizedRightPanelThreadKey, setMaximizedRightPanelThreadKey] = useState<string | null>(
     null,
   );
@@ -1504,6 +1523,14 @@ function ChatViewContent(props: ChatViewProps) {
   // depend on which route is mounted.
   const isServerThread = activeServerThread !== null;
   const activeThread = activeServerThread ?? localDraftThread;
+  const pairedOtherThreadId = activeThread?.pairSession
+    ? activeThread.pairSession.leadThreadId === activeThread.id
+      ? activeThread.pairSession.peerThreadId
+      : activeThread.pairSession.leadThreadId
+    : null;
+  const pairedOtherThread = useThread(
+    pairedOtherThreadId ? scopeThreadRef(environmentId, pairedOtherThreadId) : null,
+  );
   const threadError = isServerThread
     ? (localServerError ?? activeServerThread?.session?.lastError ?? null)
     : localDraftError;
@@ -1992,6 +2019,7 @@ function ChatViewContent(props: ChatViewProps) {
     : (primaryEnvironment?.serverConfig ?? null);
   const pullRequestsCapabilityKnown = serverConfig !== null;
   const supportsPullRequests = serverConfig?.environment.capabilities.pullRequests === true;
+  const supportsAgentPair = serverConfig?.environment.capabilities.agentPair === true;
   const versionMismatch = resolveServerConfigVersionMismatch(serverConfig);
   const versionMismatchDismissKey =
     versionMismatch && activeThread
@@ -2565,6 +2593,9 @@ function ChatViewContent(props: ChatViewProps) {
   }, [turnDiffSummaries]);
   const revertTurnCountByUserMessageId = useMemo(() => {
     const byUserMessageId = new Map<MessageId, number>();
+    if (activeThread?.pairSession) {
+      return byUserMessageId;
+    }
     for (let index = 0; index < timelineEntries.length; index += 1) {
       const entry = timelineEntries[index];
       if (!entry || entry.kind !== "message" || entry.message.role !== "user") {
@@ -2594,7 +2625,12 @@ function ChatViewContent(props: ChatViewProps) {
     }
 
     return byUserMessageId;
-  }, [inferredCheckpointTurnCountByTurnId, timelineEntries, turnDiffSummaryByAssistantMessageId]);
+  }, [
+    activeThread?.pairSession,
+    inferredCheckpointTurnCountByTurnId,
+    timelineEntries,
+    turnDiffSummaryByAssistantMessageId,
+  ]);
 
   const gitCwd = activeProject
     ? projectScriptCwd({
@@ -2775,8 +2811,9 @@ function ChatViewContent(props: ChatViewProps) {
   );
 
   const focusComposer = useCallback(() => {
+    if (!pairPaneActive) return;
     composerRef.current?.focusAtEnd();
-  }, [composerRef]);
+  }, [composerRef, pairPaneActive]);
   const scheduleComposerFocus = useCallback(() => {
     window.requestAnimationFrame(() => {
       focusComposer();
@@ -4654,6 +4691,7 @@ function ChatViewContent(props: ChatViewProps) {
 
   useEffect(() => {
     const handler = (event: globalThis.KeyboardEvent) => {
+      if (!pairPaneActive) return;
       if (preventRepeatedTerminalCloseShortcut(event, keybindings)) {
         event.stopPropagation();
         return;
@@ -4799,12 +4837,14 @@ function ChatViewContent(props: ChatViewProps) {
     toggleRightPanel,
     toggleTerminalVisibility,
     composerRef,
+    pairPaneActive,
   ]);
 
   const onRevertToTurnCount = useCallback(
     async (turnCount: number) => {
       const localApi = readLocalApi();
       if (!localApi || !activeThread || isRevertingCheckpoint) return;
+      if (activeThread.pairSession) return;
 
       if (activeEnvironmentUnavailable && activeEnvironmentUnavailableLabel) {
         setThreadError(
@@ -5978,6 +6018,25 @@ function ChatViewContent(props: ChatViewProps) {
     }
     void onRevertToTurnCountRef.current(targetTurnCount);
   }, []);
+  const pairedThreadLabels = useMemo(() => {
+    const labels = new Map<ThreadId, string>();
+    for (const thread of [activeThread, pairedOtherThread]) {
+      if (!thread) continue;
+      const instanceId = thread.session?.providerInstanceId ?? thread.modelSelection.instanceId;
+      const provider = providerStatuses.find((entry) => entry.instanceId === instanceId);
+      const providerLabel = provider?.displayName ?? instanceId;
+      labels.set(thread.id, `${providerLabel} · ${thread.modelSelection.model}`);
+    }
+    return labels;
+  }, [
+    activeThread?.id,
+    activeThread?.modelSelection,
+    activeThread?.session?.providerInstanceId,
+    pairedOtherThread?.id,
+    pairedOtherThread?.modelSelection,
+    pairedOtherThread?.session?.providerInstanceId,
+    providerStatuses,
+  ]);
 
   // Empty state: no active thread
   if (!activeThread) {
@@ -6120,8 +6179,98 @@ function ChatViewContent(props: ChatViewProps) {
     ) : null
   ) : null;
 
+  const pairInitialSelection =
+    activeProject?.defaultModelSelection ??
+    activeThread?.modelSelection ??
+    NO_PROVIDER_MODEL_SELECTION;
+  const activePairProviderLabel = activeThread
+    ? (providerStatuses.find(
+        (entry) =>
+          entry.instanceId ===
+          (activeThread.session?.providerInstanceId ?? activeThread.modelSelection.instanceId),
+      )?.displayName ?? activeThread.modelSelection.instanceId)
+    : null;
+
+  const handleStartPair = async (modelSelection: ModelSelection) => {
+    if (!activeThread || !activeProject || activeThread.pairSession || pairMutationPending) {
+      return;
+    }
+    setPairMutationPending(true);
+    const peerThreadId = newThreadId();
+    const pairSessionId = randomUUID();
+    const createResult = await createThread({
+      environmentId,
+      input: {
+        threadId: peerThreadId,
+        projectId: activeProject.id,
+        title: truncate(`${activeThread.title} · Pair`),
+        modelSelection,
+        runtimeMode: activeThread.runtimeMode,
+        interactionMode: activeThread.interactionMode,
+        branch: activeThread.branch,
+        worktreePath: activeThread.worktreePath,
+        createdAt: new Date().toISOString(),
+      },
+    });
+    let failure: AtomCommandResult<unknown, unknown> | null =
+      createResult._tag === "Failure" ? createResult : null;
+    if (failure === null) {
+      const pairResult = await startThreadPair({
+        environmentId,
+        input: { threadId: activeThread.id, peerThreadId, pairSessionId },
+      });
+      failure = pairResult._tag === "Failure" ? pairResult : null;
+    }
+    if (failure !== null) {
+      if (createResult._tag !== "Failure") {
+        const cleanupResult = await deleteThread({
+          environmentId,
+          input: { threadId: peerThreadId },
+        });
+        if (cleanupResult._tag === "Failure" && !isAtomCommandInterrupted(cleanupResult)) {
+          console.warn(
+            "Failed to clean up pair thread after start failure.",
+            squashAtomCommandFailure(cleanupResult),
+          );
+        }
+      }
+      if (!isAtomCommandInterrupted(failure)) {
+        const error = squashAtomCommandFailure(failure);
+        toastManager.add({
+          type: "error",
+          title: "Could not start pair session",
+          description: chatActionErrorMessage(error),
+        });
+      }
+    } else {
+      setPairDialogOpen(false);
+    }
+    setPairMutationPending(false);
+  };
+  const handleEndPair = async () => {
+    if (!activeThread?.pairSession || pairMutationPending) return;
+    setPairMutationPending(true);
+    const result = await endThreadPair({
+      environmentId,
+      input: { threadId: activeThread.id },
+    });
+    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+      const error = squashAtomCommandFailure(result);
+      toastManager.add({
+        type: "error",
+        title: "Could not end pair session",
+        description: chatActionErrorMessage(error),
+      });
+    }
+    setPairMutationPending(false);
+  };
+
   return (
-    <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-background">
+    <div
+      className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-background"
+      onPointerDownCapture={onPairPaneActivate}
+      onFocusCapture={onPairPaneActivate}
+    >
       {rightPanelOpen && !shouldUseRightPanelSheet ? panelLayoutControls : null}
       <div
         className={cn(
@@ -6169,6 +6318,17 @@ function ChatViewContent(props: ChatViewProps) {
             availableEditors={availableEditors}
             rightPanelOpen={rightPanelOpen}
             gitCwd={gitCwd}
+            pairRole={activeThread.pairSession ? (pairPaneRole ?? null) : null}
+            pairProviderLabel={activePairProviderLabel}
+            pairModelLabel={activeThread.modelSelection.model}
+            onStartPair={
+              isServerThread && supportsAgentPair && !activeThread.pairSession
+                ? () => setPairDialogOpen(true)
+                : undefined
+            }
+            onEndPair={
+              activeThread.pairSession && pairPaneRole === "lead" ? handleEndPair : undefined
+            }
             onNewThreadInProject={handleNewThreadInActiveProject}
             onRunProjectScript={runProjectScript}
             onAddProjectScript={saveProjectScript}
@@ -6237,6 +6397,11 @@ function ChatViewContent(props: ChatViewProps) {
                 hideEmptyPlaceholder={isDraftHeroState || threadDetailLoading}
                 topFadeEnabled={!hasTimelineTopBanner}
                 loadEarlier={loadEarlierTurns}
+                peerThreadLabels={pairedThreadLabels}
+                {...(activeThread.pairSession
+                  ? { activePairSessionId: activeThread.pairSession.id }
+                  : {})}
+                checkpointRevertEnabled={!activeThread.pairSession}
               />
 
               {/* scroll to end pill — shown when user has scrolled away from the live edge */}
@@ -6593,6 +6758,16 @@ function ChatViewContent(props: ChatViewProps) {
           onClose={closeExpandedImage}
         />
       )}
+
+      <PairSessionDialog
+        open={pairDialogOpen}
+        busy={pairMutationPending}
+        providers={providerStatuses}
+        settings={settings}
+        initialSelection={pairInitialSelection}
+        onOpenChange={setPairDialogOpen}
+        onConfirm={(selection) => void handleStartPair(selection)}
+      />
     </div>
   );
 }

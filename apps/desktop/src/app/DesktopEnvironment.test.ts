@@ -111,6 +111,32 @@ describe("DesktopEnvironment", () => {
     }),
   );
 
+  it.effect("keeps the packaged Pair identity and state separate from the official app", () =>
+    Effect.gen(function* () {
+      const environment = yield* makeEnvironment(
+        {
+          isPackaged: true,
+          buildFlavor: "pair",
+        },
+        {
+          T3CODE_HOME: "/tmp/official-t3-home",
+          T3CODE_DESKTOP_APP_USER_MODEL_ID: "com.example.override",
+        },
+      );
+
+      assert.equal(environment.buildFlavor, "pair");
+      assert.equal(environment.isPairBuild, true);
+      assert.equal(environment.baseDir, "/Users/alice/.t3-pair");
+      assert.equal(environment.stateDir, "/Users/alice/.t3-pair/userdata");
+      assert.equal(environment.userDataDirName, "t3code-pair");
+      assert.equal(environment.legacyUserDataDirName, "t3code-pair");
+      assert.equal(environment.rendererScheme, "t3code-pair");
+      assert.equal(environment.appUserModelId, "com.hcaiano.t3code.pair");
+      assert.equal(environment.displayName, "T3 Code Pair (Nightly)");
+      assert.equal(environment.autoUpdatesEnabled, false);
+    }),
+  );
+
   it.effect("uses a configured app user model id override", () =>
     Effect.gen(function* () {
       const environment = yield* makeEnvironment(

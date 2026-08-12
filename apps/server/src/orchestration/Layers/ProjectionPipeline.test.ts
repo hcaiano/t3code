@@ -2538,6 +2538,100 @@ it.layer(makeProjectionPipelinePrefixedTestLayer("t3-pending-turn-terminal-test-
         assert.deepEqual(pendingRows, []);
       }),
     );
+
+    it.effect("keeps a pending Pair start until the matching lifecycle update", () =>
+      Effect.gen(function* () {
+        const projectionPipeline = yield* OrchestrationProjectionPipeline;
+        const eventStore = yield* OrchestrationEventStore;
+        const sql = yield* SqlClient.SqlClient;
+        const threadId = ThreadId.make("thread-pair-stale-ready");
+        const messageId = MessageId.make("message-pair-pending");
+        const createdAt = "2026-02-26T15:00:00.000Z";
+
+        yield* eventStore.append({
+          type: "thread.turn-start-requested",
+          eventId: EventId.make("evt-pair-pending"),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: createdAt,
+          commandId: CommandId.make("cmd-pair-pending"),
+          causationEventId: null,
+          correlationId: CorrelationId.make("cmd-pair-pending"),
+          metadata: {},
+          payload: {
+            threadId,
+            messageId,
+            runtimeMode: "approval-required",
+            interactionMode: "default",
+            pairSessionId: "pair-stale-ready",
+            createdAt,
+          },
+        });
+        yield* eventStore.append({
+          type: "thread.session-set",
+          eventId: EventId.make("evt-pair-stale-ready"),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: createdAt,
+          commandId: CommandId.make("cmd-pair-stale-ready"),
+          causationEventId: null,
+          correlationId: CorrelationId.make("cmd-pair-stale-ready"),
+          metadata: {},
+          payload: {
+            threadId,
+            session: {
+              threadId,
+              status: "ready",
+              providerName: "codex",
+              runtimeMode: "approval-required",
+              activeTurnId: null,
+              lastError: null,
+              updatedAt: createdAt,
+            },
+          },
+        });
+
+        yield* projectionPipeline.bootstrap;
+        const afterStale = yield* sql<{ readonly messageId: string }>`
+          SELECT pending_message_id AS "messageId"
+          FROM projection_turns
+          WHERE thread_id = ${threadId} AND turn_id IS NULL
+        `;
+        assert.deepEqual(afterStale, [{ messageId }]);
+
+        yield* eventStore.append({
+          type: "thread.session-set",
+          eventId: EventId.make("evt-pair-matching-error"),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: createdAt,
+          commandId: CommandId.make("cmd-pair-matching-error"),
+          causationEventId: null,
+          correlationId: CorrelationId.make("cmd-pair-matching-error"),
+          metadata: {},
+          payload: {
+            threadId,
+            session: {
+              threadId,
+              status: "error",
+              providerName: "codex",
+              runtimeMode: "approval-required",
+              activeTurnId: null,
+              lastError: "failed",
+              updatedAt: createdAt,
+            },
+            turnStartMessageId: messageId,
+          },
+        });
+        yield* projectionPipeline.bootstrap;
+        const afterMatching = yield* sql<{ readonly messageId: string }>`
+          SELECT pending_message_id AS "messageId"
+          FROM projection_turns
+          WHERE thread_id = ${threadId} AND turn_id IS NULL
+        `;
+        assert.deepEqual(afterMatching, []);
+      }),
+    );
   },
 );
 

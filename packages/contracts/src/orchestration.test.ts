@@ -66,6 +66,53 @@ it.effect("parses turn diff input when fromTurnCount <= toTurnCount", () =>
   }),
 );
 
+it.effect("decodes Pair Session commands and optional Peer message provenance", () =>
+  Effect.gen(function* () {
+    const command = yield* decodeOrchestrationCommand({
+      type: "thread.pair.start",
+      commandId: "pair-start",
+      threadId: "lead",
+      peerThreadId: "peer",
+      pairSessionId: "pair-1",
+      createdAt: "2026-08-12T12:00:00.000Z",
+    });
+    assert.strictEqual(command.type, "thread.pair.start");
+
+    const event = yield* decodeOrchestrationEvent({
+      sequence: 1,
+      eventId: "event-1",
+      aggregateKind: "thread",
+      aggregateId: "peer",
+      occurredAt: "2026-08-12T12:00:00.000Z",
+      commandId: "pair-message",
+      causationEventId: null,
+      correlationId: "pair-message",
+      metadata: {},
+      type: "thread.message-sent",
+      payload: {
+        threadId: "peer",
+        messageId: "received",
+        role: "user",
+        text: "Please review this.",
+        peerMessage: {
+          pairSessionId: "pair-1",
+          pairMessageId: "pair-message-1",
+          fromThreadId: "lead",
+          toThreadId: "peer",
+        },
+        turnId: null,
+        streaming: false,
+        createdAt: "2026-08-12T12:00:00.000Z",
+        updatedAt: "2026-08-12T12:00:00.000Z",
+      },
+    });
+    assert.strictEqual(event.type, "thread.message-sent");
+    if (event.type === "thread.message-sent") {
+      assert.strictEqual(event.payload.peerMessage?.pairSessionId, "pair-1");
+    }
+  }),
+);
+
 it.effect("parses turn diff input with whitespace ignoring enabled", () =>
   Effect.gen(function* () {
     const parsed = yield* decodeTurnDiffInput({

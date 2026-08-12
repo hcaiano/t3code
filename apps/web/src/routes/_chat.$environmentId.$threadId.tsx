@@ -2,6 +2,7 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect } from "react";
 
 import ChatView from "../components/ChatView";
+import { PairSessionView } from "../components/PairSessionView";
 import { threadHasStarted } from "../components/ChatView.logic";
 import { finalizePromotedDraftThreadByRef, useComposerDraftStore } from "../composerDraftStore";
 import { resolveThreadRouteRef, resolveThreadRouteRenderState } from "../threadRoutes";
@@ -56,6 +57,7 @@ function ChatThreadRouteView() {
   });
   const serverThreadStarted = threadHasStarted(serverThreadDetail);
   const environmentHasAnyThreads = environmentHasServerThreads || environmentHasDraftThreads;
+  const pairSession = serverThreadDetail?.pairSession ?? serverThreadShell?.pairSession ?? null;
 
   useEffect(() => {
     if (!threadRef || !bootstrapComplete) {
@@ -81,12 +83,20 @@ function ChatThreadRouteView() {
   return (
     <SidebarInset className="h-svh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground md:h-dvh">
       {renderState === "ready" || (renderState === "loading" && serverThreadShell !== null) ? (
-        <ChatView
-          environmentId={threadRef.environmentId}
-          threadId={threadRef.threadId}
-          routeKind="server"
-          threadSyncPhase={threadSyncPhase}
-        />
+        pairSession ? (
+          <PairSessionView
+            environmentId={threadRef.environmentId}
+            routeThreadId={threadRef.threadId}
+            pairSession={pairSession}
+          />
+        ) : (
+          <ChatView
+            environmentId={threadRef.environmentId}
+            threadId={threadRef.threadId}
+            routeKind="server"
+            threadSyncPhase={threadSyncPhase}
+          />
+        )
       ) : null}
     </SidebarInset>
   );

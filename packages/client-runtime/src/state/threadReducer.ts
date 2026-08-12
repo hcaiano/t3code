@@ -218,6 +218,9 @@ export function applyThreadDetailEvent(
           ...(event.payload.worktreePath !== undefined
             ? { worktreePath: event.payload.worktreePath }
             : {}),
+          ...(event.payload.pairSession !== undefined
+            ? { pairSession: event.payload.pairSession }
+            : {}),
           updatedAt: event.payload.updatedAt,
         },
       };
@@ -289,6 +292,12 @@ export function applyThreadDetailEvent(
         ...(event.payload.attachments !== undefined
           ? { attachments: event.payload.attachments }
           : {}),
+        ...(event.payload.peerMessage !== undefined
+          ? { peerMessage: event.payload.peerMessage }
+          : {}),
+        ...(event.payload.pairSessionId !== undefined
+          ? { pairSessionId: event.payload.pairSessionId }
+          : {}),
         turnId: event.payload.turnId,
         streaming: event.payload.streaming,
         createdAt: event.payload.createdAt,
@@ -312,6 +321,12 @@ export function applyThreadDetailEvent(
                   ...(message.streaming ? {} : { updatedAt: message.updatedAt }),
                   ...(message.attachments !== undefined
                     ? { attachments: message.attachments }
+                    : {}),
+                  ...(message.peerMessage !== undefined
+                    ? { peerMessage: message.peerMessage }
+                    : {}),
+                  ...(message.pairSessionId !== undefined
+                    ? { pairSessionId: message.pairSessionId }
                     : {}),
                 },
           )

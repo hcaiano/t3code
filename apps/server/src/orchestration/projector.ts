@@ -9,6 +9,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
 import { toProjectorDecodeError, type OrchestrationProjectorDecodeError } from "./Errors.ts";
+import { pairMessageIds } from "./pairMessages.ts";
 import {
   MessageSentPayloadSchema,
   ProjectCreatedPayload,
@@ -38,6 +39,11 @@ import {
 type ThreadPatch = Partial<Omit<OrchestrationThread, "id" | "projectId">>;
 const MAX_THREAD_MESSAGES = 2_000;
 const MAX_THREAD_CHECKPOINTS = 500;
+
+const threadPairStateForSessionStart = (_pairSessionId: string) => ({
+  pendingTurnMessageId: null,
+  pendingPeerMessageIds: [],
+});
 
 function checkpointStatusToLatestTurnState(status: "ready" | "missing" | "error") {
   if (status === "error") return "error" as const;
@@ -456,6 +462,15 @@ export function projectEvent(
               : {}),
             ...(payload.branch !== undefined ? { branch: payload.branch } : {}),
             ...(payload.worktreePath !== undefined ? { worktreePath: payload.worktreePath } : {}),
+            ...(payload.pairSession !== undefined
+              ? {
+                  pairSession: payload.pairSession,
+                  pairState:
+                    payload.pairSession === null
+                      ? null
+                      : threadPairStateForSessionStart(payload.pairSession.id),
+                }
+              : {}),
             updatedAt: payload.updatedAt,
           }),
         })),
@@ -508,6 +523,10 @@ export function projectEvent(
             role: payload.role,
             text: payload.text,
             ...(payload.attachments !== undefined ? { attachments: payload.attachments } : {}),
+            ...(payload.peerMessage !== undefined ? { peerMessage: payload.peerMessage } : {}),
+            ...(payload.pairSessionId !== undefined
+              ? { pairSessionId: payload.pairSessionId }
+              : {}),
             turnId: payload.turnId,
             streaming: payload.streaming,
             createdAt: payload.createdAt,
@@ -534,16 +553,52 @@ export function projectEvent(
                     ...(message.attachments !== undefined
                       ? { attachments: message.attachments }
                       : {}),
+                    ...(message.peerMessage !== undefined
+                      ? { peerMessage: message.peerMessage }
+                      : {}),
+                    ...(message.pairSessionId !== undefined
+                      ? { pairSessionId: message.pairSessionId }
+                      : {}),
                   }
                 : entry,
             )
           : [...thread.messages, message];
         const cappedMessages = messages.slice(-MAX_THREAD_MESSAGES);
+        const completedMessage = messages.find((entry) => entry.id === message.id) ?? message;
+        let pairState = thread.pairState ?? null;
+        if (payload.role === "system" && payload.peerMessage !== undefined && pairState !== null) {
+          pairState = {
+            ...pairState,
+            pendingPeerMessageIds: pairState.pendingPeerMessageIds.filter(
+              (id) => id !== payload.peerMessage?.pairMessageId,
+            ),
+          };
+        } else if (
+          payload.role === "assistant" &&
+          !payload.streaming &&
+          thread.pairSession != null &&
+          completedMessage.pairSessionId === thread.pairSession.id
+        ) {
+          const nextIds = pairMessageIds({
+            pairSessionId: thread.pairSession.id,
+            sourceMessageId: completedMessage.id,
+            text: completedMessage.text,
+          });
+          if (nextIds.length > 0) {
+            pairState = {
+              pendingTurnMessageId: pairState?.pendingTurnMessageId ?? null,
+              pendingPeerMessageIds: [
+                ...new Set([...(pairState?.pendingPeerMessageIds ?? []), ...nextIds]),
+              ],
+            };
+          }
+        }
 
         return {
           ...nextBase,
           threads: updateThread(nextBase.threads, payload.threadId, {
             messages: cappedMessages,
+            ...(pairState !== null ? { pairState } : {}),
             updatedAt: event.occurredAt,
           }),
         };
@@ -576,6 +631,12 @@ export function projectEvent(
           ...nextBase,
           threads: updateThread(nextBase.threads, payload.threadId, {
             session,
+            ...(thread.pairState?.pendingTurnMessageId !== null &&
+            thread.pairState?.pendingTurnMessageId !== undefined &&
+            payload.turnStartMessageId === thread.pairState.pendingTurnMessageId &&
+            session.status !== "starting"
+              ? { pairState: { ...thread.pairState, pendingTurnMessageId: null } }
+              : {}),
             latestTurn:
               session.status === "running" && session.activeTurnId !== null
                 ? {
@@ -608,6 +669,24 @@ export function projectEvent(
                     }
                   : thread.latestTurn,
             updatedAt: event.occurredAt,
+          }),
+        };
+      });
+
+    case "thread.turn-start-requested":
+      return Effect.sync(() => {
+        const payload = event.payload;
+        const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+        if (thread?.pairSession == null || payload.pairSessionId !== thread.pairSession.id) {
+          return nextBase;
+        }
+        return {
+          ...nextBase,
+          threads: updateThread(nextBase.threads, payload.threadId, {
+            pairState: {
+              pendingTurnMessageId: payload.messageId,
+              pendingPeerMessageIds: thread.pairState?.pendingPeerMessageIds ?? [],
+            },
           }),
         };
       });

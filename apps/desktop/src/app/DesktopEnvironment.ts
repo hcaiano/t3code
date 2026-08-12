@@ -13,6 +13,7 @@ import * as Path from "effect/Path";
 
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopConfig from "./DesktopConfig.ts";
+import { DEFAULT_DESKTOP_BUILD_FLAVOR, type DesktopBuildFlavor } from "./DesktopBuildFlavor.ts";
 import { resolveDesktopBaseDir, resolveDesktopStateDir } from "./DesktopStatePaths.ts";
 import { isNightlyDesktopVersion } from "../updates/updateChannels.ts";
 
@@ -26,6 +27,7 @@ export interface MakeDesktopEnvironmentInput {
   readonly isPackaged: boolean;
   readonly resourcesPath: string;
   readonly runningUnderArm64Translation: boolean;
+  readonly buildFlavor?: DesktopBuildFlavor;
 }
 
 export class DesktopEnvironment extends Context.Service<
@@ -37,6 +39,8 @@ export class DesktopEnvironment extends Context.Service<
     readonly processArch: string;
     readonly isPackaged: boolean;
     readonly isDevelopment: boolean;
+    readonly buildFlavor: DesktopBuildFlavor;
+    readonly isPairBuild: boolean;
     readonly appVersion: string;
     readonly appPath: string;
     readonly resourcesPath: string;
@@ -56,6 +60,7 @@ export class DesktopEnvironment extends Context.Service<
     readonly backendCwd: string;
     readonly preloadPath: string;
     readonly appUpdateYmlPath: string;
+    readonly rendererScheme: string;
     readonly devServerUrl: Option.Option<URL>;
     readonly devRemoteT3ServerEntryPath: Option.Option<string>;
     readonly configuredBackendPort: Option.Option<number>;
@@ -76,6 +81,7 @@ export class DesktopEnvironment extends Context.Service<
     readonly resolvePickFolderDefaultPath: (rawOptions: unknown) => Option.Option<string>;
     readonly resolveResourcePathCandidates: (fileName: string) => readonly string[];
     readonly developmentDockIconPath: string;
+    readonly autoUpdatesEnabled: boolean;
   }
 >()("@t3tools/desktop/app/DesktopEnvironment") {}
 
@@ -84,9 +90,14 @@ const APP_BASE_NAME = "T3 Code";
 function resolveDesktopAppStageLabel(input: {
   readonly isDevelopment: boolean;
   readonly appVersion: string;
+  readonly buildFlavor: DesktopBuildFlavor;
 }): DesktopAppStageLabel {
   if (input.isDevelopment) {
     return "Dev";
+  }
+
+  if (input.buildFlavor === "pair") {
+    return "Nightly";
   }
 
   return isNightlyDesktopVersion(input.appVersion) ? "Nightly" : "Alpha";
@@ -95,12 +106,14 @@ function resolveDesktopAppStageLabel(input: {
 function resolveDesktopAppBranding(input: {
   readonly isDevelopment: boolean;
   readonly appVersion: string;
+  readonly buildFlavor: DesktopBuildFlavor;
 }): DesktopAppBranding {
   const stageLabel = resolveDesktopAppStageLabel(input);
+  const baseName = input.buildFlavor === "pair" ? "T3 Code Pair" : APP_BASE_NAME;
   return {
-    baseName: APP_BASE_NAME,
+    baseName,
     stageLabel,
-    displayName: `${APP_BASE_NAME} (${stageLabel})`,
+    displayName: `${baseName} (${stageLabel})`,
   };
 }
 
@@ -140,6 +153,8 @@ const make = Effect.fn("desktop.environment.make")(function* (
   const path = yield* Path.Path;
   const config = yield* DesktopConfig.DesktopConfig;
   const homeDirectory = input.homeDirectory;
+  const buildFlavor = input.buildFlavor ?? DEFAULT_DESKTOP_BUILD_FLAVOR;
+  const isPairBuild = buildFlavor === "pair";
   const devServerUrl = config.devServerUrl;
   const isDevelopment = Option.isSome(devServerUrl);
   const appDataDirectory =
@@ -150,26 +165,34 @@ const make = Effect.fn("desktop.environment.make")(function* (
       : input.platform === "darwin"
         ? path.join(homeDirectory, "Library", "Application Support")
         : Option.getOrElse(config.xdgConfigHome, () => path.join(homeDirectory, ".config"));
+  const configuredBaseDir = isPairBuild
+    ? Option.some(path.join(homeDirectory, ".t3-pair"))
+    : config.t3Home;
   const baseDir = resolveDesktopBaseDir({
     homeDirectory,
     joinPath: path.join,
-    t3Home: config.t3Home,
+    t3Home: configuredBaseDir,
   });
   const rootDir = path.resolve(input.dirname, "../../..");
   const appRoot = input.isPackaged ? input.appPath : rootDir;
   const branding = resolveDesktopAppBranding({
     isDevelopment,
     appVersion: input.appVersion,
+    buildFlavor,
   });
   const displayName = branding.displayName;
   const stateDir = resolveDesktopStateDir({
     baseDir,
     isDevelopment,
     joinPath: path.join,
-    t3Home: config.t3Home,
+    t3Home: configuredBaseDir,
   });
-  const userDataDirName = isDevelopment ? "t3code-dev" : "t3code";
-  const legacyUserDataDirName = isDevelopment ? "T3 Code (Dev)" : "T3 Code (Alpha)";
+  const userDataDirName = isPairBuild ? "t3code-pair" : isDevelopment ? "t3code-dev" : "t3code";
+  const legacyUserDataDirName = isPairBuild
+    ? "t3code-pair"
+    : isDevelopment
+      ? "T3 Code (Dev)"
+      : "T3 Code (Alpha)";
   const linuxApplicationsDir = path.join(
     Option.getOrElse(config.xdgDataHome, () => path.join(homeDirectory, ".local", "share")),
     "applications",
@@ -183,6 +206,8 @@ const make = Effect.fn("desktop.environment.make")(function* (
     processArch: input.processArch,
     isPackaged: input.isPackaged,
     isDevelopment,
+    buildFlavor,
+    isPairBuild,
     appVersion: input.appVersion,
     appPath: input.appPath,
     resourcesPath,
@@ -204,6 +229,7 @@ const make = Effect.fn("desktop.environment.make")(function* (
     appUpdateYmlPath: input.isPackaged
       ? path.join(resourcesPath, "app-update.yml")
       : path.join(input.appPath, "dev-app-update.yml"),
+    rendererScheme: isPairBuild ? "t3code-pair" : isDevelopment ? "t3code-dev" : "t3code",
     devServerUrl,
     devRemoteT3ServerEntryPath: config.devRemoteT3ServerEntryPath,
     configuredBackendPort: config.configuredBackendPort,
@@ -212,11 +238,17 @@ const make = Effect.fn("desktop.environment.make")(function* (
     otlpExportIntervalMs: config.otlpExportIntervalMs,
     branding,
     displayName,
-    appUserModelId: Option.getOrElse(config.appUserModelIdOverride, () =>
-      isDevelopment ? "com.t3tools.t3code.dev" : "com.t3tools.t3code",
-    ),
-    linuxDesktopEntryName: isDevelopment ? "t3code-dev.desktop" : "t3code.desktop",
-    linuxWmClass: isDevelopment ? "t3code-dev" : "t3code",
+    appUserModelId: isPairBuild
+      ? "com.hcaiano.t3code.pair"
+      : Option.getOrElse(config.appUserModelIdOverride, () =>
+          isDevelopment ? "com.t3tools.t3code.dev" : "com.t3tools.t3code",
+        ),
+    linuxDesktopEntryName: isPairBuild
+      ? "t3code-pair.desktop"
+      : isDevelopment
+        ? "t3code-dev.desktop"
+        : "t3code.desktop",
+    linuxWmClass: isPairBuild ? "t3code-pair" : isDevelopment ? "t3code-dev" : "t3code",
     linuxApplicationsDir,
     appImagePath: config.appImagePath,
     userDataDirName,
@@ -259,6 +291,7 @@ const make = Effect.fn("desktop.environment.make")(function* (
       path.join(resourcesPath, fileName),
     ],
     developmentDockIconPath: path.join(rootDir, "assets", "dev", "blueprint-macos-1024.png"),
+    autoUpdatesEnabled: !isPairBuild,
   });
 });
 

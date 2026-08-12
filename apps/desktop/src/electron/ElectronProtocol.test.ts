@@ -17,6 +17,12 @@ vi.mock("electron", () => ({
 import * as ElectronProtocol from "./ElectronProtocol.ts";
 
 describe("ElectronProtocol", () => {
+  it("resolves a dedicated renderer scheme for Pair builds", () => {
+    assert.equal(ElectronProtocol.getDesktopScheme(false, "pair"), "t3code-pair");
+    assert.equal(ElectronProtocol.getDesktopScheme(false), "t3code");
+    assert.equal(ElectronProtocol.getDesktopScheme(true), "t3code-dev");
+  });
+
   beforeEach(() => {
     handleMock.mockReset();
     netFetchMock.mockReset();

@@ -5,7 +5,28 @@ import {
   deriveMessagesTimelineRows,
   normalizeCompactToolLabel,
   resolveAssistantMessageCopyState,
+  stripPeerMessageBlocks,
 } from "./MessagesTimeline.logic";
+
+describe("stripPeerMessageBlocks", () => {
+  it("removes peer transport blocks while preserving visible assistant text", () => {
+    expect(
+      stripPeerMessageBlocks(
+        "I found the cause.\n\n<peer_message>Please review the fix.</peer_message>\n\nContinuing now.",
+      ),
+    ).toBe("I found the cause.\n\nContinuing now.");
+  });
+
+  it("returns empty text for a transport-only assistant message", () => {
+    expect(stripPeerMessageBlocks("<peer_message>Take the server tests.</peer_message>")).toBe("");
+  });
+
+  it("hides an incomplete peer block while the assistant is streaming", () => {
+    expect(stripPeerMessageBlocks("Visible update.\n\n<peer_message>Still writing")).toBe(
+      "Visible update.",
+    );
+  });
+});
 
 describe("computeMessageDurationStart", () => {
   it("returns message createdAt when there is no preceding user message", () => {
@@ -261,6 +282,91 @@ describe("resolveAssistantMessageCopyState", () => {
 });
 
 describe("deriveMessagesTimelineRows", () => {
+  it("renders peer metadata as a neutral peer row and hides transport-only assistant rows", () => {
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        {
+          id: "peer-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:00Z",
+          message: {
+            id: "peer-message" as never,
+            role: "user",
+            text: "Please review the contracts.",
+            peerMessage: {
+              pairSessionId: "pair-1",
+              pairMessageId: "peer-1",
+              fromThreadId: "lead" as never,
+              toThreadId: "peer" as never,
+            },
+            turnId: null,
+            createdAt: "2026-01-01T00:00:00Z",
+            updatedAt: "2026-01-01T00:00:00Z",
+            streaming: false,
+          },
+        },
+        {
+          id: "raw-transport-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:01Z",
+          message: {
+            id: "raw-transport" as never,
+            role: "assistant",
+            text: "<peer_message>Please review the contracts.</peer_message>",
+            pairSessionId: "pair-1",
+            turnId: "turn-1" as never,
+            createdAt: "2026-01-01T00:00:01Z",
+            updatedAt: "2026-01-01T00:00:01Z",
+            streaming: false,
+          },
+        },
+      ],
+      expandedTurnIds: new Set(["turn-1" as never]),
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+      activePairSessionId: "pair-1",
+    });
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.kind).toBe("peer-message");
+  });
+
+  it("preserves peer-like XML from history when the message has no current Pair ID", () => {
+    const text = "<peer_message>This is example XML requested by the user.</peer_message>";
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        {
+          id: "assistant-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:00Z",
+          message: {
+            id: "assistant-message" as never,
+            role: "assistant",
+            text,
+            turnId: "turn-1" as never,
+            createdAt: "2026-01-01T00:00:00Z",
+            updatedAt: "2026-01-01T00:00:00Z",
+            streaming: false,
+          },
+        },
+      ],
+      expandedTurnIds: new Set(["turn-1" as never]),
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+      activePairSessionId: "pair-current",
+    });
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.kind).toBe("message");
+    if (rows[0]?.kind === "message") {
+      expect(rows[0].message.text).toBe(text);
+    }
+  });
+
   it("only enables assistant copy for the terminal assistant message in a turn", () => {
     const rows = deriveMessagesTimelineRows({
       timelineEntries: [
@@ -438,6 +544,35 @@ describe("deriveMessagesTimelineRows", () => {
 
     expect(userRow?.revertTurnCount).toBe(1);
     expect(assistantRow?.assistantTurnDiffSummary).toBe(assistantTurnDiffSummary);
+
+    const pairRows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        {
+          id: "user-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:00Z",
+          message: {
+            id: "user-1" as never,
+            role: "user",
+            text: "Do the thing",
+            turnId: null,
+            createdAt: "2026-01-01T00:00:00Z",
+            updatedAt: "2026-01-01T00:00:00Z",
+            streaming: false,
+          },
+        },
+      ],
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map([["user-1" as never, 1]]),
+      checkpointRevertEnabled: false,
+    });
+    const pairUserRow = pairRows.find(
+      (row): row is Extract<(typeof pairRows)[number], { kind: "message" }> =>
+        row.kind === "message" && row.message.role === "user",
+    );
+    expect(pairUserRow?.revertTurnCount).toBeUndefined();
   });
 
   it("folds settled-turn commentary and work behind a Worked-for row", () => {

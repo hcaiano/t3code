@@ -24,7 +24,9 @@ import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
 import {
   archiveThread,
   createProject,
+  endThreadPair,
   settleThread,
+  startThreadPair,
   stopThreadSession,
   unsettleThread,
 } from "./commands.ts";
@@ -169,6 +171,32 @@ describe("environment commands", () => {
           reason: "user",
         },
       ]);
+    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+  );
+
+  it.effect("dispatches Pair Session start and end commands", () =>
+    Effect.gen(function* () {
+      const dispatched: ClientOrchestrationCommand[] = [];
+      const supervisor = yield* makeSupervisor(dispatched);
+      const provideSupervisor = Effect.provideService(
+        EnvironmentSupervisor.EnvironmentSupervisor,
+        supervisor,
+      );
+
+      yield* startThreadPair({
+        commandId: CommandId.make("pair-start"),
+        threadId: ThreadId.make("lead"),
+        peerThreadId: ThreadId.make("peer"),
+        pairSessionId: "pair-1",
+        createdAt: "2026-08-12T12:00:00.000Z",
+      }).pipe(provideSupervisor);
+      yield* endThreadPair({
+        commandId: CommandId.make("pair-end"),
+        threadId: ThreadId.make("peer"),
+        createdAt: "2026-08-12T12:01:00.000Z",
+      }).pipe(provideSupervisor);
+
+      expect(dispatched.map(({ type }) => type)).toEqual(["thread.pair.start", "thread.pair.end"]);
     }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
   );
 });

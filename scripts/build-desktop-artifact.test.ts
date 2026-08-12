@@ -93,6 +93,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
   it("switches desktop packaging product names to nightly for nightly builds", () => {
     assert.equal(resolveDesktopProductName("0.0.17"), "T3 Code (Alpha)");
     assert.equal(resolveDesktopProductName("0.0.17-nightly.20260413.42"), "T3 Code (Nightly)");
+    assert.equal(resolveDesktopProductName("0.0.17", "pair"), "T3 Code Pair (Nightly)");
   });
 
   it("switches desktop packaging icons to the nightly artwork for nightly versions", () => {
@@ -359,6 +360,41 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         assert.deepStrictEqual(config.files, DESKTOP_FILE_EXCLUSIONS);
       }
     }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
+  );
+
+  it.effect("keeps Pair packaging independent from official desktop releases", () =>
+    Effect.gen(function* () {
+      const config = yield* createBuildConfig(
+        "mac",
+        "dmg",
+        "1.2.3",
+        true,
+        true,
+        4141,
+        {
+          entitlementsPath: "/tmp/official.entitlements.plist",
+          provisioningProfilePath: "/tmp/official.provisionprofile",
+        },
+        "pair",
+      );
+
+      const mac = config.mac as Record<string, unknown>;
+      assert.equal(config.appId, "com.hcaiano.t3code.pair");
+      assert.equal(config.productName, "T3 Code Pair (Nightly)");
+      assert.equal(config.artifactName, "T3-Code-Pair-${version}-${arch}.${ext}");
+      assert.notProperty(config, "publish");
+      assert.notProperty(mac, "entitlements");
+      assert.notProperty(mac, "provisioningProfile");
+      assert.deepStrictEqual(mac.protocols, [{ name: "T3 Code Pair", schemes: ["t3code-pair"] }]);
+    }).pipe(
+      Effect.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromEnv({
+            env: { T3CODE_DESKTOP_UPDATE_REPOSITORY: "pingdotgg/t3code" },
+          }),
+        ),
+      ),
+    ),
   );
 
   it.effect("preserves both Linux icon resize failures with structural context", () => {
@@ -699,6 +735,33 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.equal(resolved.platform, "win");
       assert.equal(resolved.target, "nsis");
       assert.equal(resolved.arch, "arm64");
+    }),
+  );
+
+  it.effect("resolves the explicit Pair flavor into its separate release directory", () =>
+    Effect.gen(function* () {
+      const resolved = yield* resolveBuildOptions({
+        flavor: Option.some("pair"),
+        platform: Option.some("mac"),
+        target: Option.none(),
+        arch: Option.some("arm64"),
+        buildVersion: Option.none(),
+        outputDir: Option.none(),
+        skipBuild: Option.none(),
+        keepStage: Option.none(),
+        signed: Option.some(true),
+        verbose: Option.none(),
+        mockUpdates: Option.none(),
+        mockUpdateServerPort: Option.none(),
+        wslPrebuild: Option.none(),
+      });
+
+      assert.equal(resolved.flavor, "pair");
+      assert.equal(resolved.platform, "mac");
+      assert.equal(resolved.target, "dmg");
+      assert.equal(resolved.arch, "arm64");
+      assert.equal(resolved.signed, false);
+      assert.match(resolved.outputDir, /release-pair$/);
     }),
   );
 

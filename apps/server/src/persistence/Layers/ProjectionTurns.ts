@@ -51,6 +51,7 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
           thread_id,
           turn_id,
           pending_message_id,
+          pair_session_id,
           source_proposed_plan_thread_id,
           source_proposed_plan_id,
           assistant_message_id,
@@ -67,6 +68,7 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
           ${row.threadId},
           ${row.turnId},
           ${row.pendingMessageId},
+          ${row.pairSessionId ?? null},
           ${row.sourceProposedPlanThreadId},
           ${row.sourceProposedPlanId},
           ${row.assistantMessageId},
@@ -82,6 +84,7 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
         ON CONFLICT (thread_id, turn_id)
         DO UPDATE SET
           pending_message_id = excluded.pending_message_id,
+          pair_session_id = excluded.pair_session_id,
           source_proposed_plan_thread_id = excluded.source_proposed_plan_thread_id,
           source_proposed_plan_id = excluded.source_proposed_plan_id,
           assistant_message_id = excluded.assistant_message_id,
@@ -116,6 +119,7 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
           thread_id,
           turn_id,
           pending_message_id,
+          pair_session_id,
           source_proposed_plan_thread_id,
           source_proposed_plan_id,
           assistant_message_id,
@@ -132,6 +136,7 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
           ${row.threadId},
           NULL,
           ${row.messageId},
+          ${row.pairSessionId ?? null},
           ${row.sourceProposedPlanThreadId},
           ${row.sourceProposedPlanId},
           NULL,
@@ -155,6 +160,7 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
         SELECT
           thread_id AS "threadId",
           pending_message_id AS "messageId",
+          pair_session_id AS "pairSessionId",
           source_proposed_plan_thread_id AS "sourceProposedPlanThreadId",
           source_proposed_plan_id AS "sourceProposedPlanId",
           requested_at AS "requestedAt"
@@ -169,6 +175,28 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
       `,
   });
 
+  const listPendingPairProjectionTurns = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: ProjectionPendingTurnStart,
+    execute: () =>
+      sql`
+        SELECT
+          thread_id AS "threadId",
+          pending_message_id AS "messageId",
+          pair_session_id AS "pairSessionId",
+          source_proposed_plan_thread_id AS "sourceProposedPlanThreadId",
+          source_proposed_plan_id AS "sourceProposedPlanId",
+          requested_at AS "requestedAt"
+        FROM projection_turns
+        WHERE turn_id IS NULL
+          AND state = 'pending'
+          AND pending_message_id IS NOT NULL
+          AND pair_session_id IS NOT NULL
+          AND checkpoint_turn_count IS NULL
+        ORDER BY requested_at ASC, thread_id ASC
+      `,
+  });
+
   const listProjectionTurnsByThread = SqlSchema.findAll({
     Request: ListProjectionTurnsByThreadInput,
     Result: ProjectionTurnDbRowSchema,
@@ -178,6 +206,7 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
           thread_id AS "threadId",
           turn_id AS "turnId",
           pending_message_id AS "pendingMessageId",
+          pair_session_id AS "pairSessionId",
           source_proposed_plan_thread_id AS "sourceProposedPlanThreadId",
           source_proposed_plan_id AS "sourceProposedPlanId",
           assistant_message_id AS "assistantMessageId",
@@ -211,6 +240,7 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
           thread_id AS "threadId",
           turn_id AS "turnId",
           pending_message_id AS "pendingMessageId",
+          pair_session_id AS "pairSessionId",
           source_proposed_plan_thread_id AS "sourceProposedPlanThreadId",
           source_proposed_plan_id AS "sourceProposedPlanId",
           assistant_message_id AS "assistantMessageId",
@@ -288,6 +318,20 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
         ),
       );
 
+  const listPendingPairTurnStarts: ProjectionTurnRepositoryShape["listPendingPairTurnStarts"] =
+    () =>
+      listPendingPairProjectionTurns().pipe(
+        Effect.mapError(
+          toPersistenceSqlOrDecodeError(
+            "ProjectionTurnRepository.listPendingPairTurnStarts:query",
+            "ProjectionTurnRepository.listPendingPairTurnStarts:decodeRows",
+          ),
+        ),
+        Effect.map(
+          (rows) => rows as ReadonlyArray<Schema.Schema.Type<typeof ProjectionPendingTurnStart>>,
+        ),
+      );
+
   const deletePendingTurnStartByThreadId: ProjectionTurnRepositoryShape["deletePendingTurnStartByThreadId"] =
     (input) =>
       clearPendingProjectionTurnsByThread(input).pipe(
@@ -341,6 +385,7 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
     upsertByTurnId,
     replacePendingTurnStart,
     getPendingTurnStartByThreadId,
+    listPendingPairTurnStarts,
     deletePendingTurnStartByThreadId,
     listByThreadId,
     getByTurnId,

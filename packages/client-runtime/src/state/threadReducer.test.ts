@@ -307,6 +307,62 @@ describe("applyThreadDetailEvent", () => {
     });
   });
 
+  describe("Pair Session metadata", () => {
+    it("applies pair links and visible Peer message provenance", () => {
+      const pairSession = {
+        id: "pair-1",
+        leadThreadId: ThreadId.make("thread-1"),
+        peerThreadId: ThreadId.make("thread-2"),
+      };
+      const linked = applyThreadDetailEvent(baseThread, {
+        ...baseEventFields,
+        sequence: 40,
+        occurredAt: "2026-04-01T04:00:00.000Z",
+        aggregateKind: "thread",
+        aggregateId: baseThread.id,
+        type: "thread.meta-updated",
+        payload: {
+          threadId: baseThread.id,
+          pairSession,
+          updatedAt: "2026-04-01T04:00:00.000Z",
+        },
+      });
+      expect(linked.kind).toBe("updated");
+      if (linked.kind !== "updated") return;
+
+      const peerMessage = {
+        pairSessionId: "pair-1",
+        pairMessageId: "pair-message-1",
+        fromThreadId: ThreadId.make("thread-2"),
+        toThreadId: ThreadId.make("thread-1"),
+      };
+      const messaged = applyThreadDetailEvent(linked.thread, {
+        ...baseEventFields,
+        sequence: 41,
+        occurredAt: "2026-04-01T04:01:00.000Z",
+        aggregateKind: "thread",
+        aggregateId: baseThread.id,
+        type: "thread.message-sent",
+        payload: {
+          threadId: baseThread.id,
+          messageId: MessageId.make("pair-received"),
+          role: "user",
+          text: "Please review this.",
+          peerMessage,
+          turnId: null,
+          streaming: false,
+          createdAt: "2026-04-01T04:01:00.000Z",
+          updatedAt: "2026-04-01T04:01:00.000Z",
+        },
+      });
+      expect(messaged.kind).toBe("updated");
+      if (messaged.kind === "updated") {
+        expect(messaged.thread.pairSession).toEqual(pairSession);
+        expect(messaged.thread.messages.at(-1)?.peerMessage).toEqual(peerMessage);
+      }
+    });
+  });
+
   describe("thread.message-sent", () => {
     it("appends a new message", () => {
       const result = applyThreadDetailEvent(baseThread, {

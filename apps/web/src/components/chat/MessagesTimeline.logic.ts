@@ -16,6 +16,17 @@ export const TIMELINE_MINIMAP_MIN_ITEMS = 2;
 export const TIMELINE_MINIMAP_MAX_HEIGHT_CSS = "calc(100vh - 18rem)";
 export const TIMELINE_CONTENT_MAX_WIDTH = 768;
 export const TIMELINE_MINIMAP_PERSISTENT_GUTTER = 48;
+const PEER_MESSAGE_BLOCK = /<peer_message\b[^>]*>[\s\S]*?<\/peer_message\s*>/giu;
+
+export function stripPeerMessageBlocks(text: string): string {
+  const withoutCompleteBlocks = text.replace(PEER_MESSAGE_BLOCK, "");
+  const incompleteBlockStart = withoutCompleteBlocks.lastIndexOf("<peer_message");
+  const visibleText =
+    incompleteBlockStart === -1
+      ? withoutCompleteBlocks
+      : withoutCompleteBlocks.slice(0, incompleteBlockStart);
+  return visibleText.replace(/\n{3,}/gu, "\n\n").trim();
+}
 
 export interface TimelineEndState {
   readonly isAtEnd?: boolean;
@@ -195,6 +206,12 @@ export type MessagesTimelineRow =
       assistantCopyStreaming: boolean;
       assistantTurnDiffSummary?: TurnDiffSummary | undefined;
       revertTurnCount?: number | undefined;
+    }
+  | {
+      kind: "peer-message";
+      id: string;
+      createdAt: string;
+      message: ChatMessage;
     }
   | {
       kind: "proposed-plan";
@@ -452,6 +469,8 @@ export function deriveMessagesTimelineRows(input: {
   activeTurnStartedAt: string | null;
   turnDiffSummaryByAssistantMessageId: ReadonlyMap<MessageId, TurnDiffSummary>;
   revertTurnCountByUserMessageId: ReadonlyMap<MessageId, number>;
+  activePairSessionId?: string;
+  checkpointRevertEnabled?: boolean;
 }): MessagesTimelineRow[] {
   const nextRows: MessagesTimelineRow[] = [];
   const durationStartByMessageId = computeMessageDurationStart(
@@ -593,10 +612,33 @@ export function deriveMessagesTimelineRows(input: {
       continue;
     }
 
+    if (timelineEntry.message.peerMessage) {
+      nextRows.push({
+        kind: "peer-message",
+        id: `peer-message:${timelineEntry.message.peerMessage.pairMessageId}`,
+        createdAt: timelineEntry.createdAt,
+        message: timelineEntry.message,
+      });
+      continue;
+    }
+
+    const message =
+      input.activePairSessionId !== undefined &&
+      timelineEntry.message.pairSessionId === input.activePairSessionId &&
+      timelineEntry.message.role === "assistant"
+        ? {
+            ...timelineEntry.message,
+            text: stripPeerMessageBlocks(timelineEntry.message.text),
+          }
+        : timelineEntry.message;
+    if (message.role === "assistant" && message.text.length === 0 && !message.streaming) {
+      continue;
+    }
+
     const assistantTurnStillInProgress =
-      timelineEntry.message.role === "assistant" &&
+      message.role === "assistant" &&
       unsettledTurnId !== null &&
-      timelineEntry.message.turnId === unsettledTurnId;
+      message.turnId === unsettledTurnId;
 
     const durationStart =
       durationStartByMessageId.get(timelineEntry.message.id) ?? timelineEntry.message.createdAt;
@@ -605,26 +647,26 @@ export function deriveMessagesTimelineRows(input: {
     // provisionally terminal — withhold the metadata row until the turn
     // settles so commentary doesn't flash timestamps mid-work.
     const showAssistantMeta =
-      timelineEntry.message.role === "assistant" &&
-      terminalAssistantMessageIds.has(timelineEntry.message.id) &&
+      message.role === "assistant" &&
+      terminalAssistantMessageIds.has(message.id) &&
       !assistantTurnStillInProgress;
 
     nextRows.push({
       kind: "message",
       id: timelineEntry.id,
       createdAt: timelineEntry.createdAt,
-      message: timelineEntry.message,
+      message,
       durationStart,
       showAssistantMeta,
       showAssistantCopyButton: showAssistantMeta,
-      assistantCopyStreaming: timelineEntry.message.streaming || assistantTurnStillInProgress,
+      assistantCopyStreaming: message.streaming || assistantTurnStillInProgress,
       assistantTurnDiffSummary:
-        timelineEntry.message.role === "assistant"
-          ? input.turnDiffSummaryByAssistantMessageId.get(timelineEntry.message.id)
+        message.role === "assistant"
+          ? input.turnDiffSummaryByAssistantMessageId.get(message.id)
           : undefined,
       revertTurnCount:
-        timelineEntry.message.role === "user"
-          ? input.revertTurnCountByUserMessageId.get(timelineEntry.message.id)
+        input.checkpointRevertEnabled !== false && message.role === "user"
+          ? input.revertTurnCountByUserMessageId.get(message.id)
           : undefined,
     });
   }
@@ -696,6 +738,9 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
         a.onlyToolEntries === bw.onlyToolEntries
       );
     }
+
+    case "peer-message":
+      return a.message === (b as typeof a).message;
 
     case "message": {
       const bm = b as typeof a;

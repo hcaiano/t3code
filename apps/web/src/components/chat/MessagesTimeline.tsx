@@ -3,6 +3,7 @@ import {
   type MessageId,
   type ScopedThreadRef,
   type ServerProviderSkill,
+  type ThreadId,
   type TurnId,
 } from "@t3tools/contracts";
 import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";
@@ -144,6 +145,7 @@ interface TimelineRowSharedState {
   onToggleWorkGroup: (groupId: string, anchorKey: string) => void;
   agentPanelModel: AgentPanelModel;
   onOpenAgents: () => void;
+  peerThreadLabels: ReadonlyMap<ThreadId, string>;
 }
 
 interface TimelineRowActivityState {
@@ -188,6 +190,7 @@ function TimelineLoadEarlierHeader({
 }
 const TIMELINE_LIST_FOOTER = <div className="h-3 sm:h-4" />;
 const EMPTY_TIMELINE_SKILLS: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">> = [];
+const EMPTY_PEER_THREAD_LABELS: ReadonlyMap<ThreadId, string> = new Map();
 const TIMELINE_MAINTAIN_SCROLL_AT_END = {
   animated: false,
   on: {
@@ -241,6 +244,9 @@ interface MessagesTimelineProps {
   topFadeEnabled?: boolean;
   /** Non-null when older turns exist beyond the loaded window. */
   loadEarlier?: { readonly loading: boolean; readonly onLoadEarlier: () => void } | null;
+  peerThreadLabels?: ReadonlyMap<ThreadId, string>;
+  activePairSessionId?: string;
+  checkpointRevertEnabled?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -280,6 +286,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   hideEmptyPlaceholder = false,
   topFadeEnabled = false,
   loadEarlier = null,
+  peerThreadLabels = EMPTY_PEER_THREAD_LABELS,
+  activePairSessionId,
+  checkpointRevertEnabled = true,
 }: MessagesTimelineProps) {
   const [expandedTurnIds, setExpandedTurnIds] = useState<ReadonlySet<TurnId>>(new Set());
   const [expandedWorkGroupIds, setExpandedWorkGroupIds] = useState<ReadonlySet<string>>(new Set());
@@ -405,6 +414,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         activeTurnStartedAt,
         turnDiffSummaryByAssistantMessageId,
         revertTurnCountByUserMessageId,
+        ...(activePairSessionId ? { activePairSessionId } : {}),
+        checkpointRevertEnabled,
       }),
     [
       timelineEntries,
@@ -416,6 +427,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       activeTurnStartedAt,
       turnDiffSummaryByAssistantMessageId,
       revertTurnCountByUserMessageId,
+      activePairSessionId,
+      checkpointRevertEnabled,
     ],
   );
   const rows = useStableRows(rawRows);
@@ -517,6 +530,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onToggleWorkGroup,
       agentPanelModel,
       onOpenAgents,
+      peerThreadLabels,
     }),
     [
       timestampFormat,
@@ -533,6 +547,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onToggleWorkGroup,
       agentPanelModel,
       onOpenAgents,
+      peerThreadLabels,
     ],
   );
   const activityState = useMemo<TimelineRowActivityState>(
@@ -951,12 +966,41 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
       {row.kind === "message" && row.message.role === "assistant" ? (
         <AssistantTimelineRow row={row} />
       ) : null}
+      {row.kind === "peer-message" ? <PeerMessageTimelineRow row={row} /> : null}
       {row.kind === "proposed-plan" ? <ProposedPlanTimelineRow row={row} /> : null}
       {row.kind === "turn-plan" ? <TurnPlanTimelineRow row={row} /> : null}
       {row.kind === "working" ? <WorkingTimelineRow row={row} /> : null}
     </div>
   );
 });
+
+function PeerMessageTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "peer-message" }> }) {
+  const ctx = use(TimelineRowCtx);
+  const metadata = row.message.peerMessage;
+  if (!metadata) return null;
+  const fromLabel = ctx.peerThreadLabels.get(metadata.fromThreadId) ?? "Agent";
+  const toLabel = ctx.peerThreadLabels.get(metadata.toThreadId) ?? "Agent";
+
+  return (
+    <div className="mx-1 rounded-xl border border-border/70 bg-muted/30 px-3 py-2.5">
+      <div className="mb-1.5 flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
+        <span className="rounded-full border border-border bg-background px-2 py-0.5 font-medium text-foreground">
+          Peer
+        </span>
+        <span className="truncate">
+          {fromLabel} <span aria-hidden>→</span> {toLabel}
+        </span>
+      </div>
+      <ChatMarkdown
+        text={row.message.text}
+        cwd={ctx.markdownCwd}
+        threadRef={ctx.threadRef ?? undefined}
+        isStreaming={Boolean(row.message.streaming)}
+        skills={ctx.skills}
+      />
+    </div>
+  );
+}
 
 function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
   const ctx = use(TimelineRowCtx);

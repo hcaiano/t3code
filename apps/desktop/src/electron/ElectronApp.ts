@@ -1,10 +1,14 @@
+// @effect-diagnostics nodeBuiltinImport:off - Electron metadata must read staged identity before runtime services exist.
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
 
 import * as Electron from "electron";
+import { readDesktopBuildFlavor, type DesktopBuildFlavor } from "../app/DesktopBuildFlavor.ts";
 
 export interface ElectronAppMetadata {
   readonly appVersion: string;
@@ -12,6 +16,7 @@ export interface ElectronAppMetadata {
   readonly isPackaged: boolean;
   readonly resourcesPath: string;
   readonly runningUnderArm64Translation: boolean;
+  readonly buildFlavor: DesktopBuildFlavor;
 }
 
 export class ElectronAppMetadataReadError extends Schema.TaggedErrorClass<ElectronAppMetadataReadError>()(
@@ -116,6 +121,11 @@ export const make = ElectronApp.of({
       isPackaged: Electron.app.isPackaged,
       resourcesPath: process.resourcesPath,
       runningUnderArm64Translation: Electron.app.runningUnderARM64Translation === true,
+      buildFlavor: readDesktopBuildFlavor(
+        appPath,
+        (path) => NodeFS.readFileSync(path, "utf8"),
+        NodePath.join,
+      ),
     };
   }),
   name: Effect.sync(() => Electron.app.name),

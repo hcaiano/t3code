@@ -16,6 +16,7 @@ import { loadRepoEnv } from "../../scripts/lib/public-config";
 
 const repoEnv = loadRepoEnv();
 Object.assign(process.env, repoEnv);
+const isPairDesktopBuild = process.env.T3CODE_DESKTOP_FLAVOR === "pair";
 
 // Single-origin dev is signalled positively, because it cannot be inferred
 // from the absence of VITE_HTTP_URL/VITE_WS_URL: the runner deletes those keys
@@ -31,10 +32,16 @@ const explicitHost = process.env.HOST?.trim();
 const host = explicitHost || "localhost";
 const configuredWsUrl = isSingleOriginDev ? undefined : process.env.VITE_WS_URL?.trim();
 const configuredHttpUrl = isSingleOriginDev ? undefined : process.env.VITE_HTTP_URL?.trim();
-const configuredRelayUrl = repoEnv.VITE_T3CODE_RELAY_URL?.trim() || "";
-const configuredClerkPublishableKey = repoEnv.VITE_CLERK_PUBLISHABLE_KEY?.trim() || "";
-const configuredClerkJwtTemplate = repoEnv.VITE_CLERK_JWT_TEMPLATE?.trim() || "";
-const configuredClerkCliOAuthClientId = repoEnv.VITE_CLERK_CLI_OAUTH_CLIENT_ID?.trim() || "";
+const configuredRelayUrl = isPairDesktopBuild ? "" : (repoEnv.VITE_T3CODE_RELAY_URL?.trim() ?? "");
+const configuredClerkPublishableKey = isPairDesktopBuild
+  ? ""
+  : (repoEnv.VITE_CLERK_PUBLISHABLE_KEY?.trim() ?? "");
+const configuredClerkJwtTemplate = isPairDesktopBuild
+  ? ""
+  : (repoEnv.VITE_CLERK_JWT_TEMPLATE?.trim() ?? "");
+const configuredClerkCliOAuthClientId = isPairDesktopBuild
+  ? ""
+  : (repoEnv.VITE_CLERK_CLI_OAUTH_CLIENT_ID?.trim() ?? "");
 const configuredRelayTracingUrl = repoEnv.VITE_RELAY_OTLP_TRACES_URL?.trim() || "";
 const configuredRelayTracingDataset = repoEnv.VITE_RELAY_OTLP_TRACES_DATASET?.trim() || "";
 const configuredRelayTracingToken = repoEnv.VITE_RELAY_OTLP_TRACES_TOKEN?.trim() || "";

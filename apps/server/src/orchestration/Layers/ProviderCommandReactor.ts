@@ -2,6 +2,7 @@ import {
   type ChatAttachment,
   CommandId,
   EventId,
+  MessageId,
   type ModelSelection,
   type OrchestrationEvent,
   ProviderDriverKind,
@@ -34,6 +35,8 @@ import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ProviderRegistry } from "../../provider/Services/ProviderRegistry.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
+import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
+import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
 import {
   ProviderCommandReactor,
   type ProviderCommandReactorShape,
@@ -85,8 +88,14 @@ function mapProviderSessionStatusToOrchestrationStatus(
   }
 }
 
-const turnStartKeyForEvent = (event: ProviderIntentEvent): string =>
-  event.commandId !== null ? `command:${event.commandId}` : `event:${event.eventId}`;
+const turnStartKeyForEvent = (
+  event: Extract<ProviderIntentEvent, { type: "thread.turn-start-requested" }>,
+): string =>
+  event.payload.pairSessionId !== undefined
+    ? `pair:${event.payload.pairSessionId}:thread:${event.payload.threadId}:message:${event.payload.messageId}`
+    : event.commandId !== null
+      ? `command:${event.commandId}:thread:${event.payload.threadId}:message:${event.payload.messageId}`
+      : `event:${event.eventId}`;
 
 const HANDLED_TURN_START_KEY_MAX = 10_000;
 const HANDLED_TURN_START_KEY_TTL = Duration.minutes(30);
@@ -97,6 +106,15 @@ const MAX_THREAD_TITLE_CONTEXT_CHARS = 8_000;
 const MAX_FIRST_USER_TITLE_CONTEXT_CHARS = 2_000;
 const THREAD_TITLE_CONTEXT_TRUNCATION_MARKER = "[Earlier content truncated]\n\n";
 const FIRST_USER_CONTEXT_TRUNCATION_MARKER = "\n[First user message truncated]";
+
+export function providerTurnMessageText(message: {
+  readonly text: string;
+  readonly peerMessage?: unknown;
+}): string {
+  return message.peerMessage === undefined
+    ? message.text
+    : `Peer message from your paired agent:\n\n${message.text}`;
+}
 
 type ThreadTitleMessage = {
   readonly role: "user" | "assistant" | "system";
@@ -314,6 +332,7 @@ const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const orchestrationEngine = yield* OrchestrationEngineService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
+  const projectionTurnRepository = yield* ProjectionTurnRepository;
   const providerService = yield* ProviderService;
   const providerRegistry = yield* ProviderRegistry;
   const gitWorkflow = yield* GitWorkflowService;
@@ -392,6 +411,7 @@ const make = Effect.gen(function* () {
   const setThreadSession = (input: {
     readonly threadId: ThreadId;
     readonly session: OrchestrationSession;
+    readonly turnStartMessageId?: MessageId;
     readonly createdAt: string;
   }) =>
     serverCommandId("provider-session-set").pipe(
@@ -401,6 +421,9 @@ const make = Effect.gen(function* () {
           commandId,
           threadId: input.threadId,
           session: input.session,
+          ...(input.turnStartMessageId !== undefined
+            ? { turnStartMessageId: input.turnStartMessageId }
+            : {}),
           createdAt: input.createdAt,
         }),
       ),
@@ -408,6 +431,7 @@ const make = Effect.gen(function* () {
 
   const setThreadSessionErrorOnTurnStartFailure = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
+    readonly turnStartMessageId: MessageId;
     readonly detail: string;
     readonly createdAt: string;
   }) {
@@ -430,6 +454,7 @@ const make = Effect.gen(function* () {
         lastError: input.detail,
         updatedAt: input.createdAt,
       },
+      turnStartMessageId: input.turnStartMessageId,
       createdAt: input.createdAt,
     });
   });
@@ -484,6 +509,7 @@ const make = Effect.gen(function* () {
     options?: {
       readonly modelSelection?: ModelSelection;
       readonly pendingTurnStart?: boolean;
+      readonly turnStartMessageId?: MessageId;
     },
   ) {
     const thread = yield* resolveThread(threadId);
@@ -571,6 +597,9 @@ const make = Effect.gen(function* () {
           lastError: null,
           updatedAt: createdAt,
         },
+        ...(options?.turnStartMessageId !== undefined
+          ? { turnStartMessageId: options.turnStartMessageId }
+          : {}),
         createdAt,
       });
     }
@@ -656,6 +685,9 @@ const make = Effect.gen(function* () {
             lastError: session.lastError ?? null,
             updatedAt: session.updatedAt,
           },
+          ...(options?.turnStartMessageId !== undefined
+            ? { turnStartMessageId: options.turnStartMessageId }
+            : {}),
           createdAt,
         });
       });
@@ -734,6 +766,7 @@ const make = Effect.gen(function* () {
 
   const buildSendTurnRequestForThread = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
+    readonly messageId: MessageId;
     readonly messageText: string;
     readonly attachments?: ReadonlyArray<ChatAttachment>;
     readonly modelSelection?: ModelSelection;
@@ -749,6 +782,7 @@ const make = Effect.gen(function* () {
     yield* ensureSessionForThread(input.threadId, input.createdAt, {
       ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
       pendingTurnStart: true,
+      turnStartMessageId: input.messageId,
     });
     if (input.modelSelection !== undefined) {
       threadModelSelections.set(input.threadId, input.modelSelection);
@@ -1096,7 +1130,7 @@ const make = Effect.gen(function* () {
 
     const isFirstUserMessageTurn =
       thread.messages.filter((entry) => entry.role === "user").length === 1;
-    if (isFirstUserMessageTurn) {
+    if (isFirstUserMessageTurn && thread.pairSession == null) {
       const project = yield* resolveProject(thread.projectId);
       const generationCwd =
         resolveThreadWorkspaceCwd({
@@ -1132,6 +1166,7 @@ const make = Effect.gen(function* () {
       const detail = formatFailureDetail(cause);
       return setThreadSessionErrorOnTurnStartFailure({
         threadId: event.payload.threadId,
+        turnStartMessageId: event.payload.messageId,
         detail,
         createdAt: event.payload.createdAt,
       }).pipe(
@@ -1163,7 +1198,8 @@ const make = Effect.gen(function* () {
 
     const sendTurnRequest = yield* buildSendTurnRequestForThread({
       threadId: event.payload.threadId,
-      messageText: message.text,
+      messageId: event.payload.messageId,
+      messageText: providerTurnMessageText(message),
       ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
       ...(event.payload.modelSelection !== undefined
         ? { modelSelection: event.payload.modelSelection }
@@ -1415,6 +1451,66 @@ const make = Effect.gen(function* () {
 
     yield* forkParked(Stream.runForEach(orchestrationEngine.streamDomainEvents, processEvent));
 
+    // The domain stream is hot. Recover only durable Pair starts that were
+    // projected before this reactor subscribed. Stable ids dedupe overlap
+    // with a live event observed during startup.
+    const pendingPairStarts = yield* projectionTurnRepository.listPendingPairTurnStarts().pipe(
+      Effect.catchCause((cause) => {
+        if (Cause.hasInterruptsOnly(cause)) {
+          return Effect.interrupt;
+        }
+        return Effect.logWarning(
+          "provider command reactor failed to find pending Pair turn starts",
+          { cause: Cause.pretty(cause) },
+        ).pipe(Effect.as([]));
+      }),
+    );
+    yield* Effect.forEach(
+      pendingPairStarts,
+      (pending) =>
+        Effect.gen(function* () {
+          const pairSessionId = pending.pairSessionId ?? undefined;
+          if (pairSessionId === undefined) return;
+          const thread = yield* resolveThread(pending.threadId);
+          if (thread?.pairSession?.id !== pairSessionId) return;
+          const recoveryId = `pair-turn-recovery:${pairSessionId}:${pending.threadId}:${pending.messageId}`;
+          yield* worker.enqueue({
+            sequence: 0,
+            eventId: EventId.make(recoveryId),
+            aggregateKind: "thread",
+            aggregateId: pending.threadId,
+            occurredAt: pending.requestedAt,
+            commandId: CommandId.make(recoveryId),
+            causationEventId: null,
+            correlationId: CommandId.make(recoveryId),
+            metadata: {},
+            type: "thread.turn-start-requested",
+            payload: {
+              threadId: pending.threadId,
+              messageId: pending.messageId,
+              runtimeMode: thread.runtimeMode,
+              interactionMode: thread.interactionMode,
+              pairSessionId,
+              createdAt: pending.requestedAt,
+            },
+          });
+        }).pipe(
+          Effect.catchCause((cause) => {
+            if (Cause.hasInterruptsOnly(cause)) {
+              return Effect.interrupt;
+            }
+            return Effect.logWarning(
+              "provider command reactor failed to recover pending Pair turn start",
+              {
+                threadId: pending.threadId,
+                cause: Cause.pretty(cause),
+              },
+            );
+          }),
+        ),
+      { discard: true },
+    );
+
     // The domain event stream is hot, so work pending before this reactor
     // starts cannot be resumed. Correlated completions only clear the request
     // captured here, leaving any newer request untouched.
@@ -1450,4 +1546,6 @@ const make = Effect.gen(function* () {
   } satisfies ProviderCommandReactorShape;
 });
 
-export const ProviderCommandReactorLive = Layer.effect(ProviderCommandReactor, make);
+export const ProviderCommandReactorLive = Layer.effect(ProviderCommandReactor, make).pipe(
+  Layer.provide(ProjectionTurnRepositoryLive),
+);

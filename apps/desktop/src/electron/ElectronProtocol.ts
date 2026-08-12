@@ -1,27 +1,42 @@
+// @effect-diagnostics nodeBuiltinImport:off - Electron schemes must be registered synchronously before runtime services exist.
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as NodeTimersPromises from "node:timers/promises";
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 
 import * as Electron from "electron";
+import { readDesktopBuildFlavor, type DesktopBuildFlavor } from "../app/DesktopBuildFlavor.ts";
 
 export const DESKTOP_HOST = "app";
 export const DESKTOP_PRODUCTION_SCHEME = "t3code";
 export const DESKTOP_DEVELOPMENT_SCHEME = "t3code-dev";
+export const DESKTOP_PAIR_SCHEME = "t3code-pair";
 
-export function getDesktopScheme(isDevelopment: boolean): string {
+export function getDesktopScheme(
+  isDevelopment: boolean,
+  buildFlavor: DesktopBuildFlavor = "official",
+): string {
+  if (buildFlavor === "pair") return DESKTOP_PAIR_SCHEME;
   return isDevelopment ? DESKTOP_DEVELOPMENT_SCHEME : DESKTOP_PRODUCTION_SCHEME;
 }
 
-export function getDesktopOrigin(isDevelopment: boolean): string {
-  return `${getDesktopScheme(isDevelopment)}://${DESKTOP_HOST}`;
+export function getDesktopOrigin(
+  isDevelopment: boolean,
+  buildFlavor: DesktopBuildFlavor = "official",
+): string {
+  return `${getDesktopScheme(isDevelopment, buildFlavor)}://${DESKTOP_HOST}`;
 }
 
-export function getDesktopUrl(isDevelopment: boolean): string {
-  return `${getDesktopOrigin(isDevelopment)}/`;
+export function getDesktopUrl(
+  isDevelopment: boolean,
+  buildFlavor: DesktopBuildFlavor = "official",
+): string {
+  return `${getDesktopOrigin(isDevelopment, buildFlavor)}/`;
 }
 
 export class ElectronProtocolRegistrationError extends Schema.TaggedErrorClass<ElectronProtocolRegistrationError>()(
@@ -109,26 +124,25 @@ function withContentSecurityPolicy(response: Response, policy: string): Response
  * Must run synchronously during process bootstrap, before Electron emits `ready`.
  */
 export function registerDesktopSchemePrivilegesSync(): void {
-  Electron.protocol.registerSchemesAsPrivileged([
-    {
-      scheme: DESKTOP_PRODUCTION_SCHEME,
+  const appPath = Electron.app?.getAppPath?.();
+  const buildFlavor = appPath
+    ? readDesktopBuildFlavor(appPath, (path) => NodeFS.readFileSync(path, "utf8"), NodePath.join)
+    : "official";
+  const schemes =
+    buildFlavor === "pair"
+      ? [DESKTOP_PAIR_SCHEME]
+      : [DESKTOP_PRODUCTION_SCHEME, DESKTOP_DEVELOPMENT_SCHEME];
+  Electron.protocol.registerSchemesAsPrivileged(
+    schemes.map((scheme) => ({
+      scheme,
       privileges: {
         standard: true,
         secure: true,
         supportFetchAPI: true,
         corsEnabled: true,
       },
-    },
-    {
-      scheme: DESKTOP_DEVELOPMENT_SCHEME,
-      privileges: {
-        standard: true,
-        secure: true,
-        supportFetchAPI: true,
-        corsEnabled: true,
-      },
-    },
-  ]);
+    })),
+  );
 }
 
 const registerDesktopSchemePrivileges = Effect.sync(registerDesktopSchemePrivilegesSync).pipe(

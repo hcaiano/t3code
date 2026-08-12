@@ -1,4 +1,4 @@
-import { CheckpointRef, EnvironmentId, MessageId, TurnId } from "@t3tools/contracts";
+import { CheckpointRef, EnvironmentId, MessageId, ThreadId, TurnId } from "@t3tools/contracts";
 import { createRef, type ReactNode, type Ref } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeAll, describe, expect, it, vi } from "vite-plus/test";
@@ -226,6 +226,74 @@ function buildUserTimelineEntry(text: string) {
 }
 
 describe("MessagesTimeline", () => {
+  it("hides checkpoint revert actions while a pair session is active", () => {
+    const timelineEntries = [buildUserTimelineEntry("Shared worktree change")];
+    const revertCounts = new Map([[MessageId.make("message-1"), 1]]);
+
+    const normalMarkup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={timelineEntries}
+        revertTurnCountByUserMessageId={revertCounts}
+      />,
+    );
+    const pairMarkup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={timelineEntries}
+        revertTurnCountByUserMessageId={revertCounts}
+        checkpointRevertEnabled={false}
+      />,
+    );
+
+    expect(normalMarkup).toContain('aria-label="Revert to this message"');
+    expect(pairMarkup).not.toContain('aria-label="Revert to this message"');
+  });
+
+  it("renders peer messages as neutral rows with provider-neutral direction labels", () => {
+    const leadThreadId = ThreadId.make("lead-thread");
+    const peerThreadId = ThreadId.make("peer-thread");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        peerThreadLabels={
+          new Map([
+            [leadThreadId, "Provider A · model-a"],
+            [peerThreadId, "Provider B · model-b"],
+          ])
+        }
+        timelineEntries={[
+          {
+            id: "peer-entry",
+            kind: "message",
+            createdAt: MESSAGE_CREATED_AT,
+            message: {
+              id: MessageId.make("peer-message"),
+              role: "user",
+              text: "Please review the server change.",
+              peerMessage: {
+                pairSessionId: "pair-1",
+                pairMessageId: "peer-message-1",
+                fromThreadId: leadThreadId,
+                toThreadId: peerThreadId,
+              },
+              turnId: null,
+              createdAt: MESSAGE_CREATED_AT,
+              updatedAt: MESSAGE_CREATED_AT,
+              streaming: false,
+            },
+          },
+        ]}
+      />,
+    );
+
+    expect(markup).toContain(">Peer<");
+    expect(markup).toContain("Provider A · model-a");
+    expect(markup).toContain("Provider B · model-b");
+    expect(markup).toContain("Please review the server change.");
+    expect(markup).not.toContain("bg-message");
+  });
+
   it("uses the larger leading inset only when the top fade is enabled", () => {
     const timelineEntries = [buildUserTimelineEntry("Hello")];
 

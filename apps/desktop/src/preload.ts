@@ -9,7 +9,12 @@ import { contextBridge, ipcRenderer } from "electron";
 
 import * as IpcChannels from "./ipc/channels.ts";
 
-exposeClerkBridge({ passkeys: true });
+declare const __T3CODE_DESKTOP_PAIR_BUILD__: boolean | undefined;
+
+const isPairBuild =
+  typeof __T3CODE_DESKTOP_PAIR_BUILD__ === "boolean" && __T3CODE_DESKTOP_PAIR_BUILD__;
+
+exposeClerkBridge({ passkeys: !isPairBuild });
 
 function unwrapEnsureSshEnvironmentResult(result: unknown) {
   if (

@@ -11,7 +11,7 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import type { ChangeRequestStateLike } from "@t3tools/client-runtime/state/thread-settled";
-import { ChevronDownIcon } from "lucide-react";
+import { ChevronDownIcon, UsersIcon } from "lucide-react";
 import {
   memo,
   useCallback,
@@ -42,6 +42,7 @@ import {
   WorkspaceBreadcrumbSeparator,
 } from "../WorkspaceBreadcrumb";
 import { cn } from "~/lib/utils";
+import { Button } from "../ui/button";
 
 interface ChatHeaderProps {
   activeThreadEnvironmentId: EnvironmentId;
@@ -62,6 +63,11 @@ interface ChatHeaderProps {
   availableEditors: ReadonlyArray<EditorId>;
   rightPanelOpen: boolean;
   gitCwd: string | null;
+  pairRole?: "lead" | "peer" | null;
+  pairProviderLabel?: string | null;
+  pairModelLabel?: string | null;
+  onStartPair?: (() => void) | undefined;
+  onEndPair?: (() => void) | undefined;
   readonly onOpenPullRequest?: ((number: number) => void) | undefined;
   onNewThreadInProject: () => void;
   onRunProjectScript: (script: ProjectScript) => void;
@@ -116,6 +122,11 @@ export const ChatHeader = memo(function ChatHeader({
   availableEditors,
   rightPanelOpen,
   gitCwd,
+  pairRole = null,
+  pairProviderLabel = null,
+  pairModelLabel = null,
+  onStartPair,
+  onEndPair,
   onOpenPullRequest,
   onNewThreadInProject,
   onRunProjectScript,
@@ -307,6 +318,27 @@ export const ChatHeader = memo(function ChatHeader({
           rightPanelOpen ? "pr-0" : "pr-16",
         )}
       >
+        {pairRole ? (
+          <div className="hidden min-w-0 items-center gap-1.5 text-xs text-muted-foreground @2xl/header-actions:flex">
+            <span className="rounded-full border border-border/70 px-2 py-0.5 font-medium capitalize text-foreground">
+              {pairRole}
+            </span>
+            <span className="max-w-40 truncate">
+              {[pairProviderLabel, pairModelLabel].filter(Boolean).join(" · ")}
+            </span>
+          </div>
+        ) : null}
+        {onStartPair ? (
+          <Button size="xs" variant="ghost" onClick={onStartPair} aria-label="Start pair session">
+            <UsersIcon />
+            <span className="hidden @2xl/header-actions:inline">Pair</span>
+          </Button>
+        ) : null}
+        {onEndPair ? (
+          <Button size="xs" variant="ghost" onClick={onEndPair}>
+            End pair
+          </Button>
+        ) : null}
         {activeProjectScripts && (
           <ProjectScriptsControl
             scripts={activeProjectScripts}

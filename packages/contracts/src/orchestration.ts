@@ -238,11 +238,36 @@ export type OrchestrationProject = typeof OrchestrationProject.Type;
 export const OrchestrationMessageRole = Schema.Literals(["user", "assistant", "system"]);
 export type OrchestrationMessageRole = typeof OrchestrationMessageRole.Type;
 
+export const ThreadPairSession = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  leadThreadId: ThreadId,
+  peerThreadId: ThreadId,
+});
+export type ThreadPairSession = typeof ThreadPairSession.Type;
+
+/** Server-internal Pair lifecycle state. Clients must not depend on this field. */
+export const ThreadPairState = Schema.Struct({
+  pendingTurnMessageId: Schema.NullOr(MessageId),
+  pendingPeerMessageIds: Schema.Array(TrimmedNonEmptyString),
+});
+export type ThreadPairState = typeof ThreadPairState.Type;
+
+export const ThreadPeerMessage = Schema.Struct({
+  pairSessionId: TrimmedNonEmptyString,
+  pairMessageId: TrimmedNonEmptyString,
+  fromThreadId: ThreadId,
+  toThreadId: ThreadId,
+});
+export type ThreadPeerMessage = typeof ThreadPeerMessage.Type;
+
 export const OrchestrationMessage = Schema.Struct({
   id: MessageId,
   role: OrchestrationMessageRole,
   text: Schema.String,
   attachments: Schema.optional(Schema.Array(ChatAttachment)),
+  peerMessage: Schema.optional(ThreadPeerMessage),
+  /** Pair Session active when this message started its turn. */
+  pairSessionId: Schema.optional(TrimmedNonEmptyString),
   turnId: Schema.NullOr(TurnId),
   streaming: Schema.Boolean,
   createdAt: IsoDateTime,
@@ -397,6 +422,9 @@ export const OrchestrationThread = Schema.Struct({
   pinOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   // Pending-only state. Optional so older servers remain compatible.
   titleRegeneration: Schema.optional(Schema.NullOr(ThreadTitleRegeneration)),
+  pairSession: Schema.optional(Schema.NullOr(ThreadPairSession)),
+  /** Server-internal; omitted from client snapshots. */
+  pairState: Schema.optional(Schema.NullOr(ThreadPairState)),
   deletedAt: Schema.NullOr(IsoDateTime),
   messages: Schema.Array(OrchestrationMessage),
   proposedPlans: Schema.Array(OrchestrationProposedPlan).pipe(
@@ -455,6 +483,7 @@ export const OrchestrationThreadShell = Schema.Struct({
   pinnedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   pinOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   titleRegeneration: Schema.optional(Schema.NullOr(ThreadTitleRegeneration)),
+  pairSession: Schema.optional(Schema.NullOr(ThreadPairSession)),
   session: Schema.NullOr(OrchestrationSession),
   latestUserMessageAt: Schema.NullOr(IsoDateTime),
   hasPendingApprovals: Schema.Boolean,
@@ -782,6 +811,22 @@ const ThreadInteractionModeSetCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ThreadPairStartCommand = Schema.Struct({
+  type: Schema.Literal("thread.pair.start"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  peerThreadId: ThreadId,
+  pairSessionId: TrimmedNonEmptyString,
+  createdAt: IsoDateTime,
+});
+
+const ThreadPairEndCommand = Schema.Struct({
+  type: Schema.Literal("thread.pair.end"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  createdAt: IsoDateTime,
+});
+
 const ThreadTurnStartBootstrapCreateThread = Schema.Struct({
   projectId: ProjectId,
   title: TrimmedNonEmptyString,
@@ -913,6 +958,8 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadMetaUpdateCommand,
   ThreadRuntimeModeSetCommand,
   ThreadInteractionModeSetCommand,
+  ThreadPairStartCommand,
+  ThreadPairEndCommand,
   ThreadTurnStartCommand,
   ThreadTurnInterruptCommand,
   ThreadApprovalRespondCommand,
@@ -941,6 +988,8 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadMetaUpdateCommand,
   ThreadRuntimeModeSetCommand,
   ThreadInteractionModeSetCommand,
+  ThreadPairStartCommand,
+  ThreadPairEndCommand,
   ClientThreadTurnStartCommand,
   ThreadTurnInterruptCommand,
   ThreadApprovalRespondCommand,
@@ -955,6 +1004,8 @@ const ThreadSessionSetCommand = Schema.Struct({
   commandId: CommandId,
   threadId: ThreadId,
   session: OrchestrationSession,
+  /** Server-internal identity of the turn-start request this lifecycle update adopts. */
+  turnStartMessageId: Schema.optional(MessageId),
   createdAt: IsoDateTime,
 });
 
@@ -965,6 +1016,7 @@ const ThreadMessageAssistantDeltaCommand = Schema.Struct({
   messageId: MessageId,
   delta: Schema.String,
   turnId: Schema.optional(TurnId),
+  pairSessionId: Schema.optional(TrimmedNonEmptyString),
   createdAt: IsoDateTime,
 });
 
@@ -974,6 +1026,7 @@ const ThreadMessageAssistantCompleteCommand = Schema.Struct({
   threadId: ThreadId,
   messageId: MessageId,
   turnId: Schema.optional(TurnId),
+  pairSessionId: Schema.optional(TrimmedNonEmptyString),
   createdAt: IsoDateTime,
 });
 
@@ -1023,6 +1076,18 @@ const ThreadTitleRegenerationCompleteCommand = Schema.Struct({
   title: Schema.optional(TrimmedNonEmptyString),
 });
 
+const ThreadPairMessageForwardCommand = Schema.Struct({
+  type: Schema.Literal("thread.pair.message.forward"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  pairSessionId: TrimmedNonEmptyString,
+  pairMessageId: TrimmedNonEmptyString,
+  senderMessageId: MessageId,
+  receiverMessageId: MessageId,
+  text: TrimmedNonEmptyString,
+  createdAt: IsoDateTime,
+});
+
 const InternalOrchestrationCommand = Schema.Union([
   ThreadSessionSetCommand,
   ThreadMessageAssistantDeltaCommand,
@@ -1032,6 +1097,7 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadActivityAppendCommand,
   ThreadRevertCompleteCommand,
   ThreadTitleRegenerationCompleteCommand,
+  ThreadPairMessageForwardCommand,
 ]);
 export type InternalOrchestrationCommand = typeof InternalOrchestrationCommand.Type;
 
@@ -1201,6 +1267,7 @@ export const ThreadMetaUpdatedPayload = Schema.Struct({
   modelSelection: Schema.optional(ModelSelection),
   branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  pairSession: Schema.optional(Schema.NullOr(ThreadPairSession)),
   updatedAt: IsoDateTime,
 });
 
@@ -1224,6 +1291,8 @@ export const ThreadMessageSentPayload = Schema.Struct({
   role: OrchestrationMessageRole,
   text: Schema.String,
   attachments: Schema.optional(Schema.Array(ChatAttachment)),
+  peerMessage: Schema.optional(ThreadPeerMessage),
+  pairSessionId: Schema.optional(TrimmedNonEmptyString),
   turnId: Schema.NullOr(TurnId),
   streaming: Schema.Boolean,
   createdAt: IsoDateTime,
@@ -1240,6 +1309,8 @@ export const ThreadTurnStartRequestedPayload = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
   ),
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
+  /** Pair Session active when this turn was requested. */
+  pairSessionId: Schema.optional(TrimmedNonEmptyString),
   createdAt: IsoDateTime,
 });
 
@@ -1282,6 +1353,8 @@ export const ThreadSessionStopRequestedPayload = Schema.Struct({
 export const ThreadSessionSetPayload = Schema.Struct({
   threadId: ThreadId,
   session: OrchestrationSession,
+  /** Server-internal identity of the turn-start request this lifecycle update adopts. */
+  turnStartMessageId: Schema.optional(MessageId),
 });
 
 export const ThreadProposedPlanUpsertedPayload = Schema.Struct({

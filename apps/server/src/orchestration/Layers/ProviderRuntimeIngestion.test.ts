@@ -17,6 +17,7 @@ import {
   EventId,
   MessageId,
   type OrchestrationCommand,
+  type OrchestrationThreadShell,
   ProjectId,
   ProviderItemId,
   type ServerSettings,
@@ -28,10 +29,11 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
+import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import { it as effectIt } from "@effect/vitest";
+import { assert, it as effectIt } from "@effect/vitest";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
@@ -47,7 +49,10 @@ import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
 import * as ThreadBackgroundLiveness from "../ThreadBackgroundLiveness.ts";
 import * as ThreadPlanProgress from "../ThreadPlanProgress.ts";
-import { ProviderRuntimeIngestionLive } from "./ProviderRuntimeIngestion.ts";
+import {
+  makePairTurnProvenanceResolver,
+  ProviderRuntimeIngestionLive,
+} from "./ProviderRuntimeIngestion.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
@@ -192,6 +197,167 @@ async function waitForThread(
   };
   return poll();
 }
+
+function startingPairShell(threadId: ThreadId): OrchestrationThreadShell {
+  return {
+    id: threadId,
+    projectId: asProjectId("project-1"),
+    title: "Pair thread",
+    modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5-codex" },
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    branch: null,
+    worktreePath: "/repo",
+    latestTurn: null,
+    createdAt: "2026-08-12T12:00:00.000Z",
+    updatedAt: "2026-08-12T12:00:00.000Z",
+    archivedAt: null,
+    settledOverride: null,
+    settledAt: null,
+    pairSession: {
+      id: "pair-a",
+      leadThreadId: threadId,
+      peerThreadId: asThreadId("peer"),
+    },
+    session: {
+      threadId,
+      status: "starting",
+      providerName: "codex",
+      runtimeMode: "full-access",
+      activeTurnId: null,
+      lastError: null,
+      updatedAt: "2026-08-12T12:00:00.000Z",
+    },
+    latestUserMessageAt: null,
+    hasPendingApprovals: false,
+    hasPendingUserInput: false,
+    hasActionableProposedPlan: false,
+  };
+}
+
+effectIt.effect("caches Pair turn provenance after one repository lookup", () =>
+  Effect.gen(function* () {
+    const threadId = asThreadId("pair-cache-thread");
+    const turnId = asTurnId("pair-cache-turn");
+    let lookups = 0;
+    const resolver = yield* makePairTurnProvenanceResolver({
+      getByTurnId: () => {
+        lookups += 1;
+        return Effect.succeed(
+          Option.some({
+            threadId,
+            turnId,
+            pendingMessageId: null,
+            pairSessionId: "pair-a",
+            sourceProposedPlanThreadId: null,
+            sourceProposedPlanId: null,
+            assistantMessageId: null,
+            state: "running",
+            requestedAt: "2026-08-12T12:00:00.000Z",
+            startedAt: "2026-08-12T12:00:00.000Z",
+            completedAt: null,
+            checkpointTurnCount: null,
+            checkpointRef: null,
+            checkpointStatus: null,
+            checkpointFiles: [],
+          }),
+        );
+      },
+      getPendingTurnStartByThreadId: () => Effect.die("unexpected pending lookup"),
+      getThreadShellById: () => Effect.die("unexpected shell lookup"),
+      listProviderSessions: () => Effect.die("unexpected session lookup"),
+    });
+
+    yield* resolver.resolve(threadId, turnId);
+    assert.strictEqual(lookups, 0);
+    resolver.markEligible(threadId, true);
+    assert.strictEqual(yield* resolver.resolve(threadId, turnId), "pair-a");
+    assert.strictEqual(yield* resolver.resolve(threadId, turnId), "pair-a");
+    assert.strictEqual(yield* resolver.resolve(threadId, turnId), "pair-a");
+    assert.strictEqual(lookups, 1);
+  }),
+);
+
+effectIt.effect("uses matching pending Pair provenance before the concrete turn exists", () =>
+  Effect.gen(function* () {
+    const threadId = asThreadId("pair-pending-thread");
+    const turnId = asTurnId("pair-pending-turn");
+    const resolver = yield* makePairTurnProvenanceResolver({
+      getByTurnId: () => Effect.succeed(Option.none()),
+      getPendingTurnStartByThreadId: () =>
+        Effect.succeed(
+          Option.some({
+            threadId,
+            messageId: asMessageId("pair-bootstrap-message"),
+            pairSessionId: "pair-a",
+            sourceProposedPlanThreadId: null,
+            sourceProposedPlanId: null,
+            requestedAt: "2026-08-12T12:00:00.000Z",
+          }),
+        ),
+      getThreadShellById: () => Effect.succeed(Option.some(startingPairShell(threadId))),
+      listProviderSessions: () =>
+        Effect.succeed([
+          {
+            provider: ProviderDriverKind.make("codex"),
+            status: "running",
+            runtimeMode: "full-access",
+            threadId,
+            activeTurnId: turnId,
+            createdAt: "2026-08-12T12:00:00.000Z",
+            updatedAt: "2026-08-12T12:00:00.000Z",
+          },
+        ]),
+    });
+    resolver.markEligible(threadId, true);
+    assert.strictEqual(yield* resolver.resolve(threadId, turnId), "pair-a");
+  }),
+);
+
+effectIt.effect("rechecks Pair provenance after an earlier negative lookup", () =>
+  Effect.gen(function* () {
+    const threadId = asThreadId("pair-late-concrete-thread");
+    const turnId = asTurnId("pair-late-concrete-turn");
+    let concreteExists = false;
+    let lookups = 0;
+    const resolver = yield* makePairTurnProvenanceResolver({
+      getByTurnId: () => {
+        lookups += 1;
+        return Effect.succeed(
+          concreteExists
+            ? Option.some({
+                threadId,
+                turnId,
+                pendingMessageId: asMessageId("pair-late-message"),
+                pairSessionId: "pair-a",
+                sourceProposedPlanThreadId: null,
+                sourceProposedPlanId: null,
+                assistantMessageId: null,
+                state: "running" as const,
+                requestedAt: "2026-08-12T12:00:00.000Z",
+                startedAt: "2026-08-12T12:00:00.000Z",
+                completedAt: null,
+                checkpointTurnCount: null,
+                checkpointRef: null,
+                checkpointStatus: null,
+                checkpointFiles: [],
+              })
+            : Option.none(),
+        );
+      },
+      getPendingTurnStartByThreadId: () => Effect.succeed(Option.none()),
+      getThreadShellById: () => Effect.die("unexpected shell lookup"),
+      listProviderSessions: () => Effect.die("unexpected session lookup"),
+    });
+    resolver.markEligible(threadId, true);
+
+    assert.isUndefined(yield* resolver.resolve(threadId, turnId));
+    concreteExists = true;
+    assert.strictEqual(yield* resolver.resolve(threadId, turnId), "pair-a");
+    assert.strictEqual(yield* resolver.resolve(threadId, turnId), "pair-a");
+    assert.strictEqual(lookups, 2);
+  }),
+);
 
 describe("ProviderRuntimeIngestion", () => {
   let runtime: ManagedRuntime.ManagedRuntime<
@@ -1023,6 +1189,128 @@ describe("ProviderRuntimeIngestion", () => {
     );
     expect(message?.text).toBe("hello world");
     expect(message?.streaming).toBe(false);
+  });
+
+  it("keeps assistant message provenance from Pair A after the thread joins Pair B", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+    for (const id of ["peer-a", "peer-b"]) {
+      await harness.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make(`create-${id}`),
+        threadId: asThreadId(id),
+        projectId: asProjectId("project-1"),
+        title: id,
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt: now,
+      });
+    }
+    await harness.dispatch({
+      type: "thread.pair.start",
+      commandId: CommandId.make("start-pair-a"),
+      threadId: asThreadId("thread-1"),
+      peerThreadId: asThreadId("peer-a"),
+      pairSessionId: "pair-a",
+      createdAt: now,
+    });
+    await harness.dispatch({
+      type: "thread.session.set",
+      commandId: CommandId.make("pair-a-turn-running"),
+      threadId: asThreadId("thread-1"),
+      session: {
+        threadId: asThreadId("thread-1"),
+        status: "running",
+        providerName: "codex",
+        runtimeMode: "approval-required",
+        activeTurnId: asTurnId("turn-pair-a"),
+        updatedAt: now,
+        lastError: null,
+      },
+      turnStartMessageId: asMessageId("pair:pair-a:lead:start"),
+      createdAt: now,
+    });
+    await harness.dispatch({
+      type: "thread.session.set",
+      commandId: CommandId.make("pair-a-turn-ready"),
+      threadId: asThreadId("thread-1"),
+      session: {
+        threadId: asThreadId("thread-1"),
+        status: "ready",
+        providerName: "codex",
+        runtimeMode: "approval-required",
+        activeTurnId: null,
+        updatedAt: now,
+        lastError: null,
+      },
+      createdAt: now,
+    });
+    await harness.dispatch({
+      type: "thread.session.set",
+      commandId: CommandId.make("pair-a-peer-ready"),
+      threadId: asThreadId("peer-a"),
+      session: {
+        threadId: asThreadId("peer-a"),
+        status: "ready",
+        providerName: "codex",
+        runtimeMode: "approval-required",
+        activeTurnId: null,
+        updatedAt: now,
+        lastError: null,
+      },
+      turnStartMessageId: asMessageId("pair:pair-a:peer:start"),
+      createdAt: now,
+    });
+    await harness.dispatch({
+      type: "thread.pair.end",
+      commandId: CommandId.make("end-pair-a"),
+      threadId: asThreadId("thread-1"),
+      createdAt: now,
+    });
+    await harness.dispatch({
+      type: "thread.pair.start",
+      commandId: CommandId.make("start-pair-b"),
+      threadId: asThreadId("thread-1"),
+      peerThreadId: asThreadId("peer-b"),
+      pairSessionId: "pair-b",
+      createdAt: now,
+    });
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("pair-a-late-delta"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-pair-a"),
+      itemId: asItemId("pair-a-late-message"),
+      payload: { streamKind: "assistant_text", delta: "late Pair A response" },
+    });
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("pair-a-late-complete"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-pair-a"),
+      itemId: asItemId("pair-a-late-message"),
+      payload: { itemType: "assistant_message", status: "completed" },
+    });
+
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.messages.some(
+        (message) => message.id === "assistant:pair-a-late-message" && !message.streaming,
+      ),
+    );
+    const message = thread.messages.find((entry) => entry.id === "assistant:pair-a-late-message");
+    expect(thread.pairSession?.id).toBe("pair-b");
+    expect(message?.pairSessionId).toBe("pair-a");
   });
 
   it("uses assistant item completion detail when no assistant deltas were streamed", async () => {

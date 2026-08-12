@@ -150,6 +150,8 @@ describe("ProviderCommandReactor", () => {
     readonly requiresNewThreadForModelChange?: boolean;
     readonly titleRegenerationCompletionDispatchFailures?: number;
     readonly titleRegenerationBeforeStart?: "one" | "two";
+    readonly createSecondThread?: boolean;
+    readonly pairStartBeforeReactor?: boolean;
     readonly startSessionEffect?: (
       session: ProviderSession,
     ) => Effect.Effect<ProviderSession, ProviderAdapterRequestError>;
@@ -415,6 +417,7 @@ describe("ProviderCommandReactor", () => {
       Layer.provideMerge(ServerSettingsService.layerTest()),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
       Layer.provideMerge(NodeServices.layer),
+      Layer.provideMerge(SqlitePersistenceMemory),
     );
     runtime = ManagedRuntime.make(layer);
 
@@ -449,7 +452,11 @@ describe("ProviderCommandReactor", () => {
         createdAt: now,
       }),
     );
-    if (input?.titleRegenerationBeforeStart === "two") {
+    if (
+      input?.titleRegenerationBeforeStart === "two" ||
+      input?.createSecondThread === true ||
+      input?.pairStartBeforeReactor === true
+    ) {
       await Effect.runPromise(
         engine.dispatch({
           type: "thread.create",
@@ -481,6 +488,18 @@ describe("ProviderCommandReactor", () => {
           ),
           threadId,
           regenerateTitle: true,
+        }),
+      );
+    }
+    if (input?.pairStartBeforeReactor === true) {
+      await Effect.runPromise(
+        engine.dispatch({
+          type: "thread.pair.start",
+          commandId: CommandId.make("cmd-pair-start-before-reactor"),
+          threadId: ThreadId.make("thread-1"),
+          peerThreadId: ThreadId.make("thread-2"),
+          pairSessionId: "pair-before-reactor",
+          createdAt: now,
         }),
       );
     }
@@ -550,6 +569,75 @@ describe("ProviderCommandReactor", () => {
     expect(thread?.session?.threadId).toBe("thread-1");
     expect(thread?.session?.status).toBe("starting");
     expect(thread?.session?.runtimeMode).toBe("approval-required");
+  });
+
+  it("starts both agents when one Pair Session command emits two turn requests", async () => {
+    const harness = await createHarness({ createSecondThread: true });
+    const now = "2026-01-01T00:00:00.000Z";
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.make("cmd-pair-lead-worktree"),
+        threadId: ThreadId.make("thread-1"),
+        worktreePath: "/tmp/provider-project-pair-worktree",
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.make("cmd-pair-peer-first-user-setup"),
+        threadId: ThreadId.make("thread-2"),
+        title: "New thread",
+        branch: "t3code/1234abcd",
+        worktreePath: "/tmp/provider-project-pair-worktree",
+      }),
+    );
+    harness.generateBranchName.mockReturnValue(
+      Effect.succeed({ branch: "feature/pair-bootstrap" }),
+    );
+    harness.generateThreadTitle.mockReturnValue(Effect.succeed({ title: "Pair bootstrap" }));
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.pair.start",
+        commandId: CommandId.make("cmd-pair-start"),
+        threadId: ThreadId.make("thread-1"),
+        peerThreadId: ThreadId.make("thread-2"),
+        pairSessionId: "pair-1",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.startSession.mock.calls.length === 2);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    await harness.drain();
+    expect(harness.startSession.mock.calls.map((call) => call[0])).toEqual([
+      ThreadId.make("thread-1"),
+      ThreadId.make("thread-2"),
+    ]);
+    expect(
+      harness.sendTurn.mock.calls.map(
+        (call) => (call[0] as { readonly threadId: ThreadId }).threadId,
+      ),
+    ).toEqual([ThreadId.make("thread-1"), ThreadId.make("thread-2")]);
+    expect(harness.generateBranchName).not.toHaveBeenCalled();
+    expect(harness.generateThreadTitle).not.toHaveBeenCalled();
+    expect(harness.renameBranch).not.toHaveBeenCalled();
+  });
+
+  it("recovers durable pending Pair turn starts when the reactor restarts", async () => {
+    const harness = await createHarness({ pairStartBeforeReactor: true });
+
+    await waitFor(() => harness.startSession.mock.calls.length === 2);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    await harness.drain();
+
+    expect(
+      harness.sendTurn.mock.calls.map(
+        (call) => (call[0] as { readonly threadId: ThreadId }).threadId,
+      ),
+    ).toEqual([ThreadId.make("thread-1"), ThreadId.make("thread-2")]);
   });
 
   effectIt.effect("projects starting before a slow provider session finishes", () =>

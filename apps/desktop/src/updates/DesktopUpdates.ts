@@ -223,8 +223,12 @@ function getAutoUpdateDisabledReason(args: {
   platform: NodeJS.Platform;
   appImage?: string | undefined;
   disabledByEnv: boolean;
+  disabledByBuild: boolean;
   hasUpdateFeedConfig: boolean;
 }): string | null {
+  if (args.disabledByBuild) {
+    return "Automatic updates are not available in this private desktop build.";
+  }
   if (!args.hasUpdateFeedConfig) {
     return "Automatic updates are not available because no update feed is configured.";
   }
@@ -308,6 +312,7 @@ export const make = Effect.gen(function* () {
         platform: environment.platform,
         appImage: Option.getOrUndefined(config.appImagePath),
         disabledByEnv: config.disableAutoUpdate,
+        disabledByBuild: !environment.autoUpdatesEnabled,
         hasUpdateFeedConfig: hasFeedConfig,
       }),
     );
@@ -716,7 +721,7 @@ export const make = Effect.gen(function* () {
       const appUpdateYmlConfig = yield* readAppUpdateYml;
       yield* Ref.set(appUpdateYmlConfigRef, appUpdateYmlConfig);
 
-      if (config.mockUpdates) {
+      if (config.mockUpdates && environment.autoUpdatesEnabled) {
         yield* electronUpdater.setFeedURL({
           provider: "generic",
           url: `http://localhost:${config.mockUpdateServerPort}`,

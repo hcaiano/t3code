@@ -1,8 +1,10 @@
 import {
   EventId,
+  MessageId,
   type OrchestrationCommand,
   type OrchestrationEvent,
   type OrchestrationReadModel,
+  type OrchestrationThread,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Crypto from "effect/Crypto";
@@ -23,6 +25,14 @@ import {
 import { projectEvent } from "./projector.ts";
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
+
+function pairInstruction(role: "lead" | "peer"): string {
+  const roleInstruction =
+    role === "lead"
+      ? "You are the Lead for user updates. First, send the peer a concise task and progress summary."
+      : "The other agent is the Lead for user updates. Begin after its task summary; request missing context.";
+  return `${roleInstruction} You are equal collaborators; both may edit the shared workspace. Send all inter-agent context, delegation, reviews, and blockers inside complete <peer_message>...</peer_message> blocks.`;
+}
 
 // Session adoption takes seconds; a user message still unadopted after this
 // window is a failed/stale start, not pending work. Mirrors the client's
@@ -384,13 +394,13 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.delete": {
-      yield* requireThread({
+      const thread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
       const occurredAt = yield* nowIso;
-      return {
+      const deletedEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...(yield* withEventBase({
           aggregateKind: "thread",
           aggregateId: command.threadId,
@@ -403,14 +413,47 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           deletedAt: occurredAt,
         },
       };
+      if (thread.pairSession == null) {
+        return deletedEvent;
+      }
+      const otherThreadId =
+        thread.id === thread.pairSession.leadThreadId
+          ? thread.pairSession.peerThreadId
+          : thread.pairSession.leadThreadId;
+      const pairClearEvents: Array<Omit<OrchestrationEvent, "sequence">> = [];
+      for (const threadId of [thread.id, otherThreadId]) {
+        const pairedThread = readModel.threads.find((entry) => entry.id === threadId);
+        if (pairedThread?.pairSession?.id !== thread.pairSession.id) continue;
+        pairClearEvents.push({
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: threadId,
+            occurredAt,
+            commandId: command.commandId,
+          })),
+          type: "thread.meta-updated",
+          payload: {
+            threadId,
+            pairSession: null,
+            updatedAt: occurredAt,
+          },
+        });
+      }
+      return [...pairClearEvents, deletedEvent];
     }
 
     case "thread.archive": {
-      yield* requireThreadNotArchived({
+      const thread = yield* requireThreadNotArchived({
         readModel,
         command,
         threadId: command.threadId,
       });
+      if (thread.pairSession != null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${thread.id}' cannot be archived during an active Pair Session. End the Pair Session first.`,
+        });
+      }
       const occurredAt = yield* nowIso;
       return {
         ...(yield* withEventBase({
@@ -911,6 +954,191 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "thread.pair.start": {
+      const lead = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const peer = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.peerThreadId,
+      });
+      if (lead.id === peer.id) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "A Pair Session requires two different threads.",
+        });
+      }
+      if (lead.deletedAt !== null || peer.deletedAt !== null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "A deleted thread cannot join a Pair Session.",
+        });
+      }
+      if (lead.archivedAt !== null || peer.archivedAt !== null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "An archived thread cannot join a Pair Session.",
+        });
+      }
+      if (lead.projectId !== peer.projectId || lead.worktreePath !== peer.worktreePath) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Pair Session threads must use the same project and worktree.",
+        });
+      }
+      if (lead.pairSession != null || peer.pairSession != null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "A thread can only belong to one Pair Session.",
+        });
+      }
+
+      const pairSession = {
+        id: command.pairSessionId,
+        leadThreadId: lead.id,
+        peerThreadId: peer.id,
+      } as const;
+      const events: Array<Omit<OrchestrationEvent, "sequence">> = [];
+      for (const [thread, role] of [
+        [lead, "lead"],
+        [peer, "peer"],
+      ] as const) {
+        events.push({
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: thread.id,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          })),
+          type: "thread.meta-updated",
+          payload: {
+            threadId: thread.id,
+            pairSession,
+            updatedAt: command.createdAt,
+          },
+        });
+        const messageId = MessageId.make(`pair:${command.pairSessionId}:${role}:start`);
+        const messageEvent: Omit<OrchestrationEvent, "sequence"> = {
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: thread.id,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          })),
+          type: "thread.message-sent",
+          payload: {
+            threadId: thread.id,
+            messageId,
+            role: "user",
+            text: pairInstruction(role),
+            attachments: [],
+            pairSessionId: pairSession.id,
+            turnId: null,
+            streaming: false,
+            createdAt: command.createdAt,
+            updatedAt: command.createdAt,
+          },
+        };
+        events.push(messageEvent, {
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: thread.id,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          })),
+          causationEventId: messageEvent.eventId,
+          type: "thread.turn-start-requested",
+          payload: {
+            threadId: thread.id,
+            messageId,
+            runtimeMode: thread.runtimeMode,
+            interactionMode: thread.interactionMode,
+            pairSessionId: pairSession.id,
+            createdAt: command.createdAt,
+          },
+        });
+      }
+      return events;
+    }
+
+    case "thread.pair.end": {
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      if (thread.pairSession == null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${thread.id}' is not in a Pair Session.`,
+        });
+      }
+      const pairSession = thread.pairSession;
+      const threadIds = [pairSession.leadThreadId, pairSession.peerThreadId] as const;
+      const pairedThreads: OrchestrationThread[] = [];
+      for (const threadId of threadIds) {
+        const pairedThread = yield* requireThread({ readModel, command, threadId });
+        if (pairedThread.pairSession?.id !== pairSession.id) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: "The Pair Session link is inconsistent.",
+          });
+        }
+        if (
+          pairedThread.pairState == null ||
+          pairedThread.pairState.pendingTurnMessageId !== null
+        ) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail:
+              "A Pair Session cannot end while either Pair turn is pending. Wait for both agents to adopt or finish their turns.",
+          });
+        }
+        if ((pairedThread.pairState.pendingPeerMessageIds?.length ?? 0) > 0) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail:
+              "A Pair Session cannot end while Peer messages are pending delivery. Wait for delivery and try again.",
+          });
+        }
+        pairedThreads.push(pairedThread);
+      }
+      if (
+        pairedThreads.some(
+          (pairedThread) =>
+            pairedThread.session?.status === "starting" ||
+            pairedThread.session?.status === "running",
+        )
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail:
+            "A Pair Session cannot end while either agent is active. Interrupt or wait for both agents first.",
+        });
+      }
+      return yield* Effect.forEach(threadIds, (threadId) =>
+        Effect.gen(function* () {
+          return {
+            ...(yield* withEventBase({
+              aggregateKind: "thread",
+              aggregateId: threadId,
+              occurredAt: command.createdAt,
+              commandId: command.commandId,
+            })),
+            type: "thread.meta-updated" as const,
+            payload: {
+              threadId,
+              pairSession: null,
+              updatedAt: command.createdAt,
+            },
+          };
+        }),
+      );
+    }
+
     case "thread.turn.start": {
       const targetThread = yield* requireThread({
         readModel,
@@ -955,6 +1183,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           role: "user",
           text: command.message.text,
           attachments: command.message.attachments,
+          ...(targetThread.pairSession != null
+            ? { pairSessionId: targetThread.pairSession.id }
+            : {}),
           turnId: null,
           streaming: false,
           createdAt: command.createdAt,
@@ -980,6 +1211,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           runtimeMode: targetThread.runtimeMode,
           interactionMode: targetThread.interactionMode,
           ...(sourceProposedPlan !== undefined ? { sourceProposedPlan } : {}),
+          ...(targetThread.pairSession != null
+            ? { pairSessionId: targetThread.pairSession.id }
+            : {}),
           createdAt: command.createdAt,
         },
       };
@@ -1099,11 +1333,17 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.checkpoint.revert": {
-      yield* requireThread({
+      const thread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
+      if (thread.pairSession != null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${thread.id}' cannot revert checkpoints while Pair Session '${thread.pairSession.id}' is active. End the Pair Session first.`,
+        });
+      }
       return {
         ...(yield* withEventBase({
           aggregateKind: "thread",
@@ -1180,6 +1420,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           session: command.session,
+          ...(command.turnStartMessageId !== undefined
+            ? { turnStartMessageId: command.turnStartMessageId }
+            : {}),
         },
       };
       // Only a session coming alive is activity worth waking a settled thread
@@ -1233,6 +1476,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           role: "assistant",
           text: command.delta,
           turnId: command.turnId ?? null,
+          ...(command.pairSessionId !== undefined ? { pairSessionId: command.pairSessionId } : {}),
           streaming: true,
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
@@ -1260,11 +1504,118 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           role: "assistant",
           text: "",
           turnId: command.turnId ?? null,
+          ...(command.pairSessionId !== undefined ? { pairSessionId: command.pairSessionId } : {}),
           streaming: false,
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
         },
       };
+    }
+
+    case "thread.pair.message.forward": {
+      const sender = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const pairSession = sender.pairSession;
+      if (pairSession == null || pairSession.id !== command.pairSessionId) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Pair Session '${command.pairSessionId}' is no longer active.`,
+        });
+      }
+      const receiverThreadId =
+        sender.id === pairSession.leadThreadId
+          ? pairSession.peerThreadId
+          : sender.id === pairSession.peerThreadId
+            ? pairSession.leadThreadId
+            : null;
+      if (receiverThreadId === null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "The sender is not a member of the Pair Session.",
+        });
+      }
+      const receiver = yield* requireThread({
+        readModel,
+        command,
+        threadId: receiverThreadId,
+      });
+      if (receiver.pairSession?.id !== pairSession.id) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "The Pair Session link is no longer active on both threads.",
+        });
+      }
+      const peerMessage = {
+        pairSessionId: pairSession.id,
+        pairMessageId: command.pairMessageId,
+        fromThreadId: sender.id,
+        toThreadId: receiver.id,
+      } as const;
+      const senderEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: sender.id,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.message-sent",
+        payload: {
+          threadId: sender.id,
+          messageId: command.senderMessageId,
+          role: "system",
+          text: command.text,
+          peerMessage,
+          pairSessionId: pairSession.id,
+          turnId: null,
+          streaming: false,
+          createdAt: command.createdAt,
+          updatedAt: command.createdAt,
+        },
+      };
+      const receiverEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: receiver.id,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        causationEventId: senderEvent.eventId,
+        type: "thread.message-sent",
+        payload: {
+          threadId: receiver.id,
+          messageId: command.receiverMessageId,
+          role: "user",
+          text: command.text,
+          peerMessage,
+          pairSessionId: pairSession.id,
+          turnId: null,
+          streaming: false,
+          createdAt: command.createdAt,
+          updatedAt: command.createdAt,
+        },
+      };
+      const turnEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: receiver.id,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        causationEventId: receiverEvent.eventId,
+        type: "thread.turn-start-requested",
+        payload: {
+          threadId: receiver.id,
+          messageId: command.receiverMessageId,
+          runtimeMode: receiver.runtimeMode,
+          interactionMode: receiver.interactionMode,
+          pairSessionId: pairSession.id,
+          createdAt: command.createdAt,
+        },
+      };
+      return [senderEvent, receiverEvent, turnEvent];
     }
 
     case "thread.proposed-plan.upsert": {

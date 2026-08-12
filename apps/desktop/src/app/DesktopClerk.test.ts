@@ -231,4 +231,21 @@ describe("DesktopClerk", () => {
     storageMock.mockClear();
     createClerkBridgeMock.mockClear();
   });
+
+  it("uses the private renderer scheme and disables passkeys in Pair builds", () => {
+    const bridge = { cleanup: vi.fn(), isPrimaryInstance: true };
+    storageMock.mockReturnValue(storageAdapter);
+    createClerkBridgeMock.mockReturnValue(bridge);
+
+    assert.equal(DesktopClerk.createDesktopClerkBridge("/tmp/t3-pair", false, "pair"), bridge);
+    assert.deepEqual(createClerkBridgeMock.mock.calls, [
+      [
+        {
+          storage: storageAdapter,
+          passkeys: false,
+          renderer: { scheme: "t3code-pair", host: "app" },
+        },
+      ],
+    ]);
+  });
 });

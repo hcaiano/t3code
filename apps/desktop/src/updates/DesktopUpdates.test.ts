@@ -31,6 +31,7 @@ interface UpdatesHarnessOptions {
   readonly setDisableDifferentialDownload?: Effect.Effect<void>;
   readonly stopBackend?: Effect.Effect<void>;
   readonly env?: Record<string, string | undefined>;
+  readonly buildFlavor?: "official" | "pair";
 }
 
 const flushCallbacks = Effect.yieldNow;
@@ -139,6 +140,7 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
     isPackaged: true,
     resourcesPath: "/missing/resources",
     runningUnderArm64Translation: false,
+    ...(options.buildFlavor === undefined ? {} : { buildFlavor: options.buildFlavor }),
   }).pipe(
     Layer.provide(
       Layer.mergeAll(
@@ -272,6 +274,28 @@ describe("DesktopUpdates", () => {
 
       assert.equal(harness.listenerCount(), 0);
     }).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+  });
+
+  it.effect("keeps updates disabled by the packaged Pair identity", () => {
+    const harness = makeHarness({ buildFlavor: "pair" });
+
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        yield* updates.configure;
+
+        const state = yield* updates.getState;
+        const disabledReason = yield* updates.disabledReason;
+        assert.equal(state.enabled, false);
+        assert.equal(state.status, "disabled");
+        assert.deepEqual(
+          disabledReason,
+          Option.some("Automatic updates are not available in this private desktop build."),
+        );
+        assert.deepEqual(harness.feedUrls(), []);
+        assert.equal(harness.listenerCount(), 0);
+      }),
+    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
   });
 
   it.effect("updates and broadcasts state from updater events", () => {
