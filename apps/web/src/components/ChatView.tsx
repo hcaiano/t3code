@@ -308,6 +308,7 @@ import {
   deriveLockedProvider,
   readFileAsDataUrl,
   reconcileMountedTerminalThreadIds,
+  resolveStartPairAction,
   resolveThreadMetadataUpdateForNextTurn,
   resolveSendEnvMode,
   revokeBlobPreviewUrl,
@@ -6190,6 +6191,25 @@ function ChatViewContent(props: ChatViewProps) {
           (activeThread.session?.providerInstanceId ?? activeThread.modelSelection.instanceId),
       )?.displayName ?? activeThread.modelSelection.instanceId)
     : null;
+  const startPairAction = resolveStartPairAction({
+    supportsAgentPair,
+    isServerThread,
+    hasPairSession: activeThread.pairSession !== undefined,
+  });
+
+  const handlePairAction = () => {
+    if (startPairAction === "start") {
+      setPairDialogOpen(true);
+      return;
+    }
+    if (startPairAction === "requires-server-thread") {
+      toastManager.add({
+        type: "info",
+        title: "Send the first message first",
+        description: "After the thread starts, select Pair here to add the second agent.",
+      });
+    }
+  };
 
   const handleStartPair = async (modelSelection: ModelSelection) => {
     if (!activeThread || !activeProject || activeThread.pairSession || pairMutationPending) {
@@ -6321,11 +6341,7 @@ function ChatViewContent(props: ChatViewProps) {
             pairRole={activeThread.pairSession ? (pairPaneRole ?? null) : null}
             pairProviderLabel={activePairProviderLabel}
             pairModelLabel={activeThread.modelSelection.model}
-            onStartPair={
-              isServerThread && supportsAgentPair && !activeThread.pairSession
-                ? () => setPairDialogOpen(true)
-                : undefined
-            }
+            onStartPair={startPairAction === "hidden" ? undefined : handlePairAction}
             onEndPair={
               activeThread.pairSession && pairPaneRole === "lead" ? handleEndPair : undefined
             }

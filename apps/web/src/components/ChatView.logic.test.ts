@@ -26,6 +26,7 @@ import {
   isBranchMismatchDismissedForSession,
   reconcileMountedTerminalThreadIds,
   reconcileRetainedMountedThreadIds,
+  resolveStartPairAction,
   resolveThreadMetadataUpdateForNextTurn,
   resolveSendEnvMode,
   scheduleEnvironmentReconnectWarning,
@@ -33,6 +34,45 @@ import {
   shouldShowBranchMismatchBanner,
   shouldWriteThreadErrorToCurrentServerThread,
 } from "./ChatView.logic";
+
+describe("resolveStartPairAction", () => {
+  it("offers Pair on a supported draft with guidance to send the first message", () => {
+    expect(
+      resolveStartPairAction({
+        supportsAgentPair: true,
+        isServerThread: false,
+        hasPairSession: false,
+      }),
+    ).toBe("requires-server-thread");
+  });
+
+  it("opens Pair on a supported persisted thread", () => {
+    expect(
+      resolveStartPairAction({
+        supportsAgentPair: true,
+        isServerThread: true,
+        hasPairSession: false,
+      }),
+    ).toBe("start");
+  });
+
+  it("hides start while Pair is active or unsupported", () => {
+    expect(
+      resolveStartPairAction({
+        supportsAgentPair: true,
+        isServerThread: true,
+        hasPairSession: true,
+      }),
+    ).toBe("hidden");
+    expect(
+      resolveStartPairAction({
+        supportsAgentPair: false,
+        isServerThread: true,
+        hasPairSession: false,
+      }),
+    ).toBe("hidden");
+  });
+});
 
 const environmentId = EnvironmentId.make("environment-local");
 const projectId = ProjectId.make("project-1");

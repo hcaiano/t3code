@@ -51,6 +51,15 @@ export function startNewThreadForProject(
   return true;
 }
 
+export function resolveStartPairAction(input: {
+  readonly supportsAgentPair: boolean;
+  readonly isServerThread: boolean;
+  readonly hasPairSession: boolean;
+}): "start" | "requires-server-thread" | "hidden" {
+  if (!input.supportsAgentPair || input.hasPairSession) return "hidden";
+  return input.isServerThread ? "start" : "requires-server-thread";
+}
+
 export function resolveThreadMetadataUpdateForNextTurn(input: {
   currentModelSelection: ModelSelection;
   nextModelSelection?: ModelSelection;
