@@ -50,9 +50,14 @@ git merge --ff-only upstream/main
 git push origin main
 git switch pair
 git rebase upstream/main
+git push --force-with-lease origin pair
 ```
 
 Run the focused Pair tests and build a new DMG after each rebase. Install the new Pair application
 over the previous Pair application. Do not install it over the official Nightly application.
+
+The official Nightly continues to update through its normal in-app update button. The Pair build has
+no automatic updater. Update it with the commands above, rebuild the DMG, and install that DMG over
+the previous Pair build.
 
 The Pair flavor does not create or require a pull request in the official repository.
