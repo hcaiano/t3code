@@ -12,19 +12,25 @@ describe("stripPeerMessageBlocks", () => {
   it("removes peer transport blocks while preserving visible assistant text", () => {
     expect(
       stripPeerMessageBlocks(
-        "I found the cause.\n\n<peer_message>Please review the fix.</peer_message>\n\nContinuing now.",
+        "I found the cause.\n\n<t3_agent_message>Please review the fix.</t3_agent_message>\n\nContinuing now.",
       ),
     ).toBe("I found the cause.\n\nContinuing now.");
   });
 
   it("returns empty text for a transport-only assistant message", () => {
-    expect(stripPeerMessageBlocks("<peer_message>Take the server tests.</peer_message>")).toBe("");
+    expect(
+      stripPeerMessageBlocks("<t3_agent_message>Take the server tests.</t3_agent_message>"),
+    ).toBe("");
   });
 
   it("hides an incomplete peer block while the assistant is streaming", () => {
-    expect(stripPeerMessageBlocks("Visible update.\n\n<peer_message>Still writing")).toBe(
+    expect(stripPeerMessageBlocks("Visible update.\n\n<t3_agent_message>Still writing")).toBe(
       "Visible update.",
     );
+    expect(stripPeerMessageBlocks("Visible update.\n\n<T3_AGENT_MESSAGE>Still writing")).toBe(
+      "Visible update.",
+    );
+    expect(stripPeerMessageBlocks("<peer_message>Legacy transport.</peer_message>")).toBe("");
   });
 });
 
@@ -282,6 +288,53 @@ describe("resolveAssistantMessageCopyState", () => {
 });
 
 describe("deriveMessagesTimelineRows", () => {
+  it("hides Pair bootstrap messages while preserving normal user messages", () => {
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        {
+          id: "active-bootstrap-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:00Z",
+          message: {
+            id: "pair:pair-current:lead:start" as never,
+            role: "user",
+            text: "Internal Pair bootstrap",
+            pairSessionId: "pair-current",
+            turnId: null,
+            createdAt: "2026-01-01T00:00:00Z",
+            updatedAt: "2026-01-01T00:00:00Z",
+            streaming: false,
+          },
+        },
+        {
+          id: "normal-user-entry",
+          kind: "message",
+          createdAt: "2025-12-31T00:00:00Z",
+          message: {
+            id: "normal-user-message" as never,
+            role: "user",
+            text: "User-visible text",
+            turnId: null,
+            createdAt: "2025-12-31T00:00:00Z",
+            updatedAt: "2025-12-31T00:00:00Z",
+            streaming: false,
+          },
+        },
+      ],
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+      activePairSessionId: "pair-current",
+    });
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.kind).toBe("message");
+    if (rows[0]?.kind === "message") {
+      expect(rows[0].message.id).toBe("normal-user-message");
+    }
+  });
+
   it("renders peer metadata as a neutral peer row and hides transport-only assistant rows", () => {
     const rows = deriveMessagesTimelineRows({
       timelineEntries: [

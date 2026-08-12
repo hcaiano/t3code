@@ -1,9 +1,9 @@
-const PEER_MESSAGE_PATTERN = /<peer_message\b[^>]*>([\s\S]*?)<\/peer_message\s*>/gi;
+const PEER_MESSAGE_PATTERN = /<(t3_agent_message|peer_message)\b[^>]*>([\s\S]*?)<\/\1\s*>/gi;
 
 export function extractPeerMessages(text: string): ReadonlyArray<string> {
   const messages: string[] = [];
   for (const match of text.matchAll(PEER_MESSAGE_PATTERN)) {
-    const message = match[1]?.trim();
+    const message = match[2]?.trim();
     if (message) messages.push(message);
   }
   return messages;

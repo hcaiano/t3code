@@ -128,19 +128,20 @@ function reactorLayer(input: {
 }
 
 describe("Pair messages", () => {
-  it("extracts each complete non-empty block", () => {
+  it("extracts each complete non-empty T3 agent block and accepts legacy blocks", () => {
     expect(
       extractPeerMessages(
-        'before <peer_message> first </peer_message> between <peer_message recipient="peer">\nsecond\n</peer_message   > after',
+        'before <t3_agent_message> first </t3_agent_message> between <t3_agent_message recipient="agent">\nsecond\n</t3_agent_message   > after',
       ),
     ).toEqual(["first", "second"]);
-    expect(extractPeerMessages("<peer_message>incomplete")).toEqual([]);
-    expect(extractPeerMessages("<peer_message>   </peer_message>")).toEqual([]);
+    expect(extractPeerMessages("<t3_agent_message>incomplete")).toEqual([]);
+    expect(extractPeerMessages("<t3_agent_message>   </t3_agent_message>")).toEqual([]);
+    expect(extractPeerMessages("<peer_message>legacy</peer_message>")).toEqual(["legacy"]);
   });
 
   it("adds provider provenance without changing stored text", () => {
     expect(providerTurnMessageText({ text: "Please review this.", peerMessage: {} })).toBe(
-      "Peer message from your paired agent:\n\nPlease review this.",
+      "Message from the other T3 Code agent:\n\nPlease review this.",
     );
     expect(providerTurnMessageText({ text: "Human request" })).toBe("Human request");
   });

@@ -29,9 +29,9 @@ const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 function pairInstruction(role: "lead" | "peer"): string {
   const roleInstruction =
     role === "lead"
-      ? "You are the Lead for user updates. First, send the peer a concise task and progress summary."
-      : "The other agent is the Lead for user updates. Begin after its task summary; request missing context.";
-  return `${roleInstruction} You are equal collaborators; both may edit the shared workspace. Send all inter-agent context, delegation, reviews, and blockers inside complete <peer_message>...</peer_message> blocks.`;
+      ? "You are the Lead for user updates. First, write a concise task and progress summary to the other T3 Code agent through the channel below."
+      : "Another T3 Code agent is the Lead for user updates. Wait for its task summary through the channel below, then request any missing context there.";
+  return `${roleInstruction} You are equal collaborators; both may edit the shared workspace. T3 Code automatically delivers each complete <t3_agent_message>...</t3_agent_message> block to the other agent. Write all inter-agent context, delegation, reviews, and blockers directly in these blocks. The built-in channel is the complete transport; no setup or transport action is necessary.`;
 }
 
 // Session adoption takes seconds; a user message still unadopted after this

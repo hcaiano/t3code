@@ -73,9 +73,17 @@ it.layer(NodeServices.layer)("Pair Session decider", (it) => {
       const prompts = events
         .filter((event) => event.type === "thread.message-sent")
         .map((event) => event.payload.text);
-      expect(prompts[0]).toContain("First, send the peer a concise task and progress summary");
-      expect(prompts[1]).toContain("Begin after its task summary");
-      expect(prompts.every((prompt) => prompt.includes("<peer_message>"))).toBe(true);
+      expect(prompts[0]).toContain("First, write a concise task and progress summary");
+      expect(prompts[1]).toContain("Wait for its task summary");
+      expect(prompts.every((prompt) => prompt.includes("<t3_agent_message>"))).toBe(true);
+      expect(
+        prompts.every((prompt) =>
+          prompt.includes(
+            "The built-in channel is the complete transport; no setup or transport action is necessary.",
+          ),
+        ),
+      ).toBe(true);
+      expect(prompts.every((prompt) => !/herdr|peer_message|HERDR_ENV/i.test(prompt))).toBe(true);
     }),
   );
 

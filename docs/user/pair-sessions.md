@@ -2,7 +2,8 @@
 
 Pair Sessions connect two agent threads to the same project and worktree. Both agents can inspect
 and edit the workspace. One thread is the Lead for user updates, but neither thread has extra file
-permissions.
+permissions. Agent messages use T3 Code's built-in channel. They do not require an external agent
+orchestrator.
 
 ## Start a Pair Session
 
@@ -33,5 +34,7 @@ before you revert a thread.
 - The official mobile client can show and control both normal threads, but it does not show the
   combined Pair layout.
 - The private desktop build does not include T3 Connect, passkeys, or automatic updates.
+- Close the official desktop application before you continue an imported provider conversation in
+  the Pair build. Some providers allow only one active writer for a conversation.
 - The two agents share one worktree. Normal Git and filesystem conflicts are possible if both agents
   edit the same file at the same time.

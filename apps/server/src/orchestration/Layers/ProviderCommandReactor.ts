@@ -113,7 +113,7 @@ export function providerTurnMessageText(message: {
 }): string {
   return message.peerMessage === undefined
     ? message.text
-    : `Peer message from your paired agent:\n\n${message.text}`;
+    : `Message from the other T3 Code agent:\n\n${message.text}`;
 }
 
 type ThreadTitleMessage = {

@@ -16,11 +16,13 @@ export const TIMELINE_MINIMAP_MIN_ITEMS = 2;
 export const TIMELINE_MINIMAP_MAX_HEIGHT_CSS = "calc(100vh - 18rem)";
 export const TIMELINE_CONTENT_MAX_WIDTH = 768;
 export const TIMELINE_MINIMAP_PERSISTENT_GUTTER = 48;
-const PEER_MESSAGE_BLOCK = /<peer_message\b[^>]*>[\s\S]*?<\/peer_message\s*>/giu;
+const PEER_MESSAGE_BLOCK = /<(t3_agent_message|peer_message)\b[^>]*>[\s\S]*?<\/\1\s*>/giu;
 
 export function stripPeerMessageBlocks(text: string): string {
   const withoutCompleteBlocks = text.replace(PEER_MESSAGE_BLOCK, "");
-  const incompleteBlockStart = withoutCompleteBlocks.lastIndexOf("<peer_message");
+  const incompleteBlockStart = withoutCompleteBlocks.search(
+    /<(?:t3_agent_message|peer_message)\b[^>]*>(?![\s\S]*<\/(?:t3_agent_message|peer_message)\s*>)/iu,
+  );
   const visibleText =
     incompleteBlockStart === -1
       ? withoutCompleteBlocks
@@ -499,6 +501,15 @@ export function deriveMessagesTimelineRows(input: {
   for (let index = 0; index < input.timelineEntries.length; index += 1) {
     const timelineEntry = input.timelineEntries[index];
     if (!timelineEntry) {
+      continue;
+    }
+
+    if (
+      timelineEntry.kind === "message" &&
+      timelineEntry.message.pairSessionId !== undefined &&
+      (timelineEntry.message.id === `pair:${timelineEntry.message.pairSessionId}:lead:start` ||
+        timelineEntry.message.id === `pair:${timelineEntry.message.pairSessionId}:peer:start`)
+    ) {
       continue;
     }
 

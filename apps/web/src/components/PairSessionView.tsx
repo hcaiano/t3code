@@ -11,7 +11,7 @@ import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { useThread } from "../state/entities";
 import ChatView from "./ChatView";
 import { cn } from "../lib/utils";
-import { resolvePairPane, type PairPane } from "./PairSessionView.logic";
+import { pairPaneClassName, resolvePairPane, type PairPane } from "./PairSessionView.logic";
 
 function latestPeerMessageKey(messages: ReadonlyArray<OrchestrationMessage> | undefined) {
   return (
@@ -64,10 +64,7 @@ export function PairSessionView({
   };
   const renderPane = (pane: PairPane, threadId: ThreadId) => (
     <div
-      className={cn(
-        "min-h-0 min-w-0 flex-1 overflow-hidden",
-        isWide && pane === "lead" && "border-r border-border/70",
-      )}
+      className={pairPaneClassName({ isWide, pane })}
       data-pair-pane={pane}
       onPointerDownCapture={() => setActivePane(pane)}
       onFocusCapture={() => setActivePane(pane)}
