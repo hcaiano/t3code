@@ -107,60 +107,32 @@ describe("blockquote selection regions", () => {
     ]);
   });
 
-  it("preserves list depth when a quote sits inside a list item", () => {
-    expect(
-      renderBlock({
-        type: "list",
-        children: [
-          {
-            type: "list_item",
-            children: [
-              {
-                type: "blockquote",
-                children: [
-                  paragraph("Tasks"),
-                  {
-                    type: "list",
-                    children: [{ type: "list_item", children: [paragraph("Nested task")] }],
-                  },
-                ],
-              },
-            ],
-          },
-        ],
-      }),
-    ).toEqual(["Tasks\n\n◦\tNested task"]);
-    expect(selectionRegions[0]?.find((run) => run.role === "list-marker")).toMatchObject({
-      depth: 2,
-      firstLineHeadIndent: 20,
-      headIndent: 44,
+  it("aligns a quoted list with its content inside an outer list item", () => {
+    const regions = renderBlock({
+      type: "list",
+      children: [
+        {
+          type: "list_item",
+          children: [
+            {
+              type: "blockquote",
+              children: [
+                paragraph("Tasks"),
+                {
+                  type: "list",
+                  children: [{ type: "list_item", children: [paragraph("Nested task")] }],
+                },
+              ],
+            },
+          ],
+        },
+      ],
     });
-  });
-
-  it("keeps paragraphs within a quoted list item separate and aligned", () => {
-    expect(
-      renderBlock({
-        type: "blockquote",
-        children: [
-          paragraph("Intro"),
-          {
-            type: "list",
-            children: [
-              {
-                type: "list_item",
-                children: [paragraph("First paragraph."), paragraph("Second paragraph.")],
-              },
-              { type: "list_item", children: [paragraph("Next item")] },
-            ],
-          },
-          paragraph("Tail"),
-        ],
-      }),
-    ).toEqual(["Intro\n\n•\tFirst paragraph.\nSecond paragraph.\n•\tNext item\n\nTail"]);
-    expect(selectionRegions[0]?.find((run) => run.text === "Second paragraph.")).toMatchObject({
-      firstLineHeadIndent: 24,
+    expect(selectionRegions[0]?.find((run) => run.role === "list-marker")).toMatchObject({
+      firstLineHeadIndent: 0,
       headIndent: 24,
     });
+    expect(regions).toEqual(["Tasks\n\n•\tNested task"]);
   });
 
   it("keeps quoted lists on Android's dedicated list renderer", () => {

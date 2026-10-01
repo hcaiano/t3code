@@ -55,14 +55,13 @@ function documentFor(node: MarkdownNode): MarkdownNode {
 
 function SelectableNode(props: {
   readonly node: MarkdownNode;
-  readonly depth?: number;
   readonly skills: ReadonlyArray<SelectableMarkdownSkill>;
   readonly textStyle: NativeMarkdownTextStyle;
   readonly onLinkPress?: (href: string) => void;
 }) {
   return (
     <NativeMarkdownSelectableText
-      runs={nativeMarkdownDocumentRuns(documentFor(props.node), props.skills, props.depth)}
+      runs={nativeMarkdownDocumentRuns(documentFor(props.node), props.skills)}
       textStyle={props.textStyle}
       onLinkPress={props.onLinkPress}
     />
@@ -586,7 +585,6 @@ export function NativeMarkdownBlock(props: {
               <SelectableNode
                 key={chunk.key}
                 node={chunk.node}
-                depth={depth}
                 skills={props.skills}
                 textStyle={props.textStyle}
                 onLinkPress={props.onLinkPress}
