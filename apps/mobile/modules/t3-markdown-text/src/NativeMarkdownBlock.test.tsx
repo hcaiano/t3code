@@ -134,4 +134,30 @@ describe("blockquote selection regions", () => {
       headIndent: 44,
     });
   });
+
+  it("keeps paragraphs within a quoted list item separate and aligned", () => {
+    expect(
+      renderBlock({
+        type: "blockquote",
+        children: [
+          paragraph("Intro"),
+          {
+            type: "list",
+            children: [
+              {
+                type: "list_item",
+                children: [paragraph("First paragraph."), paragraph("Second paragraph.")],
+              },
+              { type: "list_item", children: [paragraph("Next item")] },
+            ],
+          },
+          paragraph("Tail"),
+        ],
+      }),
+    ).toEqual(["Intro\n\n•\tFirst paragraph.\nSecond paragraph.\n•\tNext item\n\nTail"]);
+    expect(selectionRegions[0]?.find((run) => run.text === "Second paragraph.")).toMatchObject({
+      firstLineHeadIndent: 24,
+      headIndent: 24,
+    });
+  });
 });
