@@ -557,7 +557,17 @@ export function NativeMarkdownBlock(props: {
           }}
         />
       );
-    case "blockquote":
+    case "blockquote": {
+      // Only iOS applies paragraph indents in selectable text. Android lists
+      // still need NativeList's layout inside the quote border.
+      const chunks =
+        Platform.OS === "ios"
+          ? nativeMarkdownDocumentChunks(props.node)
+          : (props.node.children ?? []).map((node, index) => ({
+              kind: "rich" as const,
+              key: nodeKey(node, index),
+              node,
+            }));
       return (
         <View
           style={{
@@ -571,7 +581,7 @@ export function NativeMarkdownBlock(props: {
         >
           {/* iOS selection cannot cross native text views. Keep consecutive
           plain children together while the parent draws the quote border. */}
-          {nativeMarkdownDocumentChunks(props.node).map((chunk) =>
+          {chunks.map((chunk) =>
             chunk.kind === "selectable" ? (
               <SelectableNode
                 key={chunk.key}
@@ -596,6 +606,7 @@ export function NativeMarkdownBlock(props: {
           )}
         </View>
       );
+    }
     case "list":
       return (
         <NativeList

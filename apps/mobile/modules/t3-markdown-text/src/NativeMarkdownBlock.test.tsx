@@ -6,8 +6,9 @@ import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import type { NativeMarkdownTextRun } from "./nativeMarkdownText";
 import type { NativeMarkdownTextStyle } from "./SelectableMarkdownText.types";
 
-const { selectionRegions } = vi.hoisted(() => ({
+const { selectionRegions, platform } = vi.hoisted(() => ({
   selectionRegions: [] as ReadonlyArray<NativeMarkdownTextRun>[],
+  platform: { OS: "ios", select: (options: { ios: string }) => options.ios },
 }));
 
 vi.mock("react-native", () => ({
@@ -15,7 +16,7 @@ vi.mock("react-native", () => ({
   Text: ({ children }: { children: ReactNode }) => <>{children}</>,
   ScrollView: ({ children }: { children: ReactNode }) => <>{children}</>,
   Image: () => null,
-  Platform: { OS: "ios", select: (options: { ios: string }) => options.ios },
+  Platform: platform,
   useColorScheme: () => "light",
 }));
 vi.mock("./CopyTextButton", () => ({ CopyTextButton: () => null }));
@@ -72,6 +73,7 @@ function renderBlock(node: MarkdownNode) {
 describe("blockquote selection regions", () => {
   beforeEach(() => {
     selectionRegions.length = 0;
+    platform.OS = "ios";
   });
 
   it("keeps a multi-paragraph email in one native selection region", () => {
@@ -159,5 +161,31 @@ describe("blockquote selection regions", () => {
       firstLineHeadIndent: 24,
       headIndent: 24,
     });
+  });
+
+  it("keeps quoted lists on Android's dedicated list renderer", () => {
+    platform.OS = "android";
+    expect(
+      renderBlock({
+        type: "blockquote",
+        children: [
+          {
+            type: "list",
+            children: [
+              {
+                type: "list_item",
+                children: [
+                  paragraph("Outer item"),
+                  {
+                    type: "list",
+                    children: [{ type: "list_item", children: [paragraph("Nested item")] }],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      }),
+    ).toEqual(["Outer item", "Nested item"]);
   });
 });
