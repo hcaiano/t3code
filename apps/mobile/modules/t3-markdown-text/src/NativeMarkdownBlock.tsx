@@ -5,6 +5,7 @@ import type { MarkdownNode } from "react-native-nitro-markdown/headless";
 import { CopyTextButton } from "./CopyTextButton";
 import { MarkdownTextPrimitive } from "./MarkdownTextPrimitive";
 import {
+  nativeMarkdownDocumentChunks,
   nativeMarkdownDocumentRuns,
   nativeMarkdownListItemBlocks,
   nativeMarkdownNodePosition,
@@ -54,13 +55,14 @@ function documentFor(node: MarkdownNode): MarkdownNode {
 
 function SelectableNode(props: {
   readonly node: MarkdownNode;
+  readonly depth?: number;
   readonly skills: ReadonlyArray<SelectableMarkdownSkill>;
   readonly textStyle: NativeMarkdownTextStyle;
   readonly onLinkPress?: (href: string) => void;
 }) {
   return (
     <NativeMarkdownSelectableText
-      runs={nativeMarkdownDocumentRuns(documentFor(props.node), props.skills)}
+      runs={nativeMarkdownDocumentRuns(documentFor(props.node), props.skills, props.depth)}
       textStyle={props.textStyle}
       onLinkPress={props.onLinkPress}
     />
@@ -567,18 +569,31 @@ export function NativeMarkdownBlock(props: {
             gap: 6,
           }}
         >
-          {(props.node.children ?? []).map((child, index) => (
-            <NativeMarkdownBlock
-              key={nodeKey(child, index)}
-              node={child}
-              skills={props.skills}
-              textStyle={props.textStyle}
-              highlightCode={props.highlightCode}
-              onLinkPress={props.onLinkPress}
-              depth={depth}
-              compact
-            />
-          ))}
+          {/* iOS selection cannot cross native text views. Keep consecutive
+          plain children together while the parent draws the quote border. */}
+          {nativeMarkdownDocumentChunks(props.node).map((chunk) =>
+            chunk.kind === "selectable" ? (
+              <SelectableNode
+                key={chunk.key}
+                node={chunk.node}
+                depth={depth}
+                skills={props.skills}
+                textStyle={props.textStyle}
+                onLinkPress={props.onLinkPress}
+              />
+            ) : (
+              <NativeMarkdownBlock
+                key={chunk.key}
+                node={chunk.node}
+                skills={props.skills}
+                textStyle={props.textStyle}
+                highlightCode={props.highlightCode}
+                onLinkPress={props.onLinkPress}
+                depth={depth}
+                compact
+              />
+            ),
+          )}
         </View>
       );
     case "list":
