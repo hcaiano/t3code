@@ -4517,6 +4517,54 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   ) =>
     Effect.gen(function* () {
       let projection = yield* getProjectionWithPendingEvents(command.threadId, events);
+      // Recovery prompts are server-created even when recorded as user messages.
+      if (command.creationSource === "server" && command.manualContinuationOfRunId === undefined) {
+        const now = yield* DateTime.now;
+        let child = projection.thread;
+        while (
+          child.lineage.relationshipToParent === "subagent" &&
+          child.lineage.parentThreadId !== null
+        ) {
+          const ancestor = yield* projectionStore
+            .getThreadRecords(child.lineage.parentThreadId, ["runs", "turnItems"], {
+              turnItemTypes: ["run_interrupt_request"],
+            })
+            .pipe(mapDispatchError(command));
+          const latest = latestExecutedRun(ancestor.runs);
+          if (
+            ancestor.thread.archivedAt !== null ||
+            ancestor.thread.deletedAt !== null ||
+            ancestor.thread.settledOverride === "settled" ||
+            (ancestor.thread.snoozedUntil != null &&
+              DateTime.isGreaterThan(ancestor.thread.snoozedUntil, now)) ||
+            latest?.status === "interrupted" ||
+            latest?.status === "cancelled" ||
+            ancestor.turnItems.some((item) => item.runId === latest?.id)
+          ) {
+            const recovery = projection.thread.limitRecovery;
+            yield* emit(
+              events,
+              command,
+            )({
+              type: "thread.metadata-updated",
+              threadId: command.threadId,
+              occurredAt: now,
+              payload: {
+                ...projection.thread,
+                // Keep the arm pending under a fresh delivery identity. This
+                // command's accepted receipt must not consume the later retry.
+                ...(recovery?.autoResume &&
+                recovery.runId === command.usageLimitContinuationOfRunId &&
+                recovery.requestId === command.usageLimitRecoveryRequestId
+                  ? { limitRecovery: { ...recovery, requestId: command.commandId } }
+                  : {}),
+              },
+            });
+            return;
+          }
+          child = ancestor.thread;
+        }
+      }
       if (command.manualContinuationOfRunId !== undefined) {
         const source = projection.runs.find((run) => run.id === command.manualContinuationOfRunId);
         const limited = latestRootProviderFailure(source ?? null, projection.turnItems);
@@ -11155,7 +11203,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       );
       if (
         command.type !== "message.dispatch" ||
-        (command.createdBy !== "user" && command.creationSource !== "mcp")
+        (command.createdBy !== "user" &&
+          command.creationSource !== "mcp" &&
+          command.creationSource !== "server")
       )
         return yield* dispatch;
       const parentThreadId = yield* appOwnedSubagentParentThreadId(command.threadId).pipe(

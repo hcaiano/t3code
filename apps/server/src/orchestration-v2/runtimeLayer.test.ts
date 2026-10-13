@@ -5562,6 +5562,31 @@ it.layer(layerTest)("usage-limit recovery", (it) => {
         assert.notEqual(pending!.commandId, resume!.commandId);
         yield* orchestrator.dispatch(pending!);
         assert.lengthOf((yield* orchestrator.getThreadProjection(threadId)).runs, 1);
+        if (scenario === "parent-stop") {
+          const parentId = ThreadId.make(`recovery:${scenario}:parent`);
+          yield* orchestrator.dispatch({
+            type: "message.dispatch",
+            commandId: CommandId.make(`recovery:${scenario}:resume-pending`),
+            messageId: MessageId.make(`recovery:${scenario}:resume-pending`),
+            threadId: parentId,
+            text: "Resume the paused work.",
+            attachments: [],
+            dispatchMode: { type: "defer_start" },
+            createdBy: "user",
+            creationSource: "web",
+          });
+          const resumedShell = (yield* orchestrator.getShellSnapshot()).threads.find(
+            (thread) => thread.id === threadId,
+          )!;
+          const retry = limitRecoveryCommand(
+            resumedShell,
+            true,
+            DateTime.toEpochMillis(yield* DateTime.now),
+          );
+          assert.isNotNull(retry);
+          yield* orchestrator.dispatch(retry!);
+          assert.lengthOf((yield* orchestrator.getThreadProjection(threadId)).runs, 2);
+        }
       }
       if (scenario === "child-user-message") {
         yield* orchestrator.dispatch({
