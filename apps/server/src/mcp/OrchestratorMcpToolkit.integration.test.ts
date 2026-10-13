@@ -1427,6 +1427,42 @@ describe("orchestrator MCP toolkit", () => {
             const threadReadTool = server.tools.find(({ tool }) => tool.name === "t3_thread_read");
             expect(threadReadTool?.tool.annotations?.readOnlyHint).toBe(false);
             expect(threadReadTool?.tool.inputSchema).toMatchObject({ additionalProperties: false });
+            const boundedRead = yield* invoke("t3_thread_read", {
+              threadId: parentThreadId,
+              limit: 100,
+              runLimit: 50,
+              maxCharsPerItem: 50_000,
+            });
+            const clampedRead = yield* invoke("t3_thread_read", {
+              threadId: parentThreadId,
+              limit: 101,
+              runLimit: 504,
+              maxCharsPerItem: 50_001,
+            });
+            expect(clampedRead.isError).toBe(false);
+            expect(clampedRead.structuredContent).toEqual({
+              ...boundedRead.structuredContent,
+              clampedLimits: { limit: 100, runLimit: 50, maxCharsPerItem: 50_000 },
+            });
+            expect(boundedRead.structuredContent).not.toHaveProperty("clampedLimits");
+            for (const name of ["t3_thread_list", "t3_queue_list"] as const) {
+              const bounded = yield* invoke(name, { limit: 100 });
+              const clamped = yield* invoke(name, { limit: 101 });
+              expect(clamped.isError).toBe(false);
+              expect(clamped.structuredContent).toEqual({
+                ...bounded.structuredContent,
+                clampedLimits: { limit: 100 },
+              });
+              expect(bounded.structuredContent).not.toHaveProperty("clampedLimits");
+            }
+            const boundedSearch = yield* invoke("t3_thread_search", { query: "task", limit: 50 });
+            const clampedSearch = yield* invoke("t3_thread_search", { query: "task", limit: 51 });
+            expect(clampedSearch.isError).toBe(false);
+            expect(clampedSearch.structuredContent).toEqual({
+              ...boundedSearch.structuredContent,
+              clampedLimits: { limit: 50 },
+            });
+            expect(boundedSearch.structuredContent).not.toHaveProperty("clampedLimits");
             const unknownPagingParamError = yield* invoke("t3_thread_read", {
               threadId: parentThreadId,
               cursor: 90,
