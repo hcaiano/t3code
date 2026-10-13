@@ -4973,6 +4973,14 @@ it.layer(layerTest)("usage-limit recovery", (it) => {
     "independent-patches",
     "expired-snooze",
     "wake",
+    "parent-stop",
+    "ancestor-stop",
+    "parent-interrupt",
+    "parent-snooze",
+    "parent-settle",
+    "parent-active",
+    "parent-resume",
+    "child-user-message",
   ] as const)("guards a scheduled usage-limit continuation against %s", (scenario) =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;
@@ -5395,6 +5403,118 @@ it.layer(layerTest)("usage-limit recovery", (it) => {
         assert.lengthOf((yield* orchestrator.getThreadProjection(threadId)).runs, 2);
       }
       const before = yield* orchestrator.getThreadProjection(threadId);
+      const hasAncestor =
+        scenario.startsWith("parent-") ||
+        scenario === "ancestor-stop" ||
+        scenario === "child-user-message";
+      if (hasAncestor) {
+        let parentId: ThreadId | null = null;
+        for (const name of ["ancestor", "parent"] as const) {
+          const id = ThreadId.make(`recovery:${scenario}:${name}`);
+          yield* events.write({
+            commandId: CommandId.make(`recovery:${scenario}:${name}:create`),
+            events: [
+              {
+                id: EventId.make(`recovery:${scenario}:${name}:create`),
+                type: "thread.created",
+                threadId: id,
+                occurredAt: now,
+                payload: {
+                  ...before.thread,
+                  id,
+                  activeProviderThreadId: null,
+                  limitRecovery: null,
+                  lineage: {
+                    parentThreadId: parentId,
+                    relationshipToParent: parentId === null ? null : "subagent",
+                    rootThreadId: ThreadId.make(`recovery:${scenario}:ancestor`),
+                  },
+                },
+              },
+            ],
+          });
+          yield* orchestrator.dispatch({
+            type: "message.dispatch",
+            commandId: CommandId.make(`recovery:${scenario}:${name}:message`),
+            messageId: MessageId.make(`recovery:${scenario}:${name}:message`),
+            threadId: id,
+            text: "Coordinate the child.",
+            attachments: [],
+            dispatchMode: { type: "defer_start" },
+            createdBy: "user",
+            creationSource: "web",
+          });
+          parentId = id;
+        }
+        yield* events.write({
+          commandId: CommandId.make(`recovery:${scenario}:lineage`),
+          events: [
+            {
+              id: EventId.make(`recovery:${scenario}:lineage`),
+              type: "thread.metadata-updated",
+              threadId,
+              occurredAt: now,
+              payload: {
+                ...before.thread,
+                lineage: {
+                  parentThreadId: parentId,
+                  relationshipToParent: "subagent",
+                  rootThreadId: ThreadId.make(`recovery:${scenario}:ancestor`),
+                },
+              },
+            },
+          ],
+        });
+        const stoppedId = ThreadId.make(
+          `recovery:${scenario}:${scenario === "ancestor-stop" ? "ancestor" : "parent"}`,
+        );
+        const ancestor = yield* orchestrator.getThreadProjection(stoppedId);
+        const commandId = CommandId.make(`recovery:${scenario}:pause`);
+        if (scenario === "parent-snooze") {
+          yield* orchestrator.dispatch({
+            type: "thread.snooze",
+            commandId,
+            threadId: stoppedId,
+            snoozedUntil: DateTime.formatIso(DateTime.add(yield* DateTime.now, { hours: 1 })),
+          });
+        } else if (scenario === "parent-settle") {
+          yield* events.write({
+            commandId: CommandId.make(`recovery:${scenario}:parent-completed`),
+            events: [
+              {
+                id: EventId.make(`recovery:${scenario}:parent-completed`),
+                type: "run.updated",
+                threadId: stoppedId,
+                occurredAt: now,
+                payload: { ...ancestor.runs[0]!, status: "completed", completedAt: now },
+              },
+            ],
+          });
+          yield* orchestrator.dispatch({ type: "thread.settle", commandId, threadId: stoppedId });
+        } else if (scenario === "parent-interrupt") {
+          yield* orchestrator.dispatch({
+            type: "run.interrupt",
+            commandId,
+            threadId: stoppedId,
+            runId: ancestor.runs[0]!.id,
+          });
+        } else if (scenario !== "parent-active") {
+          yield* orchestrator.dispatch({ type: "thread.stop", commandId, threadId: stoppedId });
+        }
+        if (scenario === "parent-resume") {
+          yield* orchestrator.dispatch({
+            type: "message.dispatch",
+            commandId: CommandId.make(`recovery:${scenario}:manual-resume`),
+            messageId: MessageId.make(`recovery:${scenario}:manual-resume`),
+            threadId: stoppedId,
+            text: "Resume the work.",
+            attachments: [],
+            dispatchMode: { type: "defer_start" },
+            createdBy: "user",
+            creationSource: "web",
+          });
+        }
+      }
       if (resume !== null) {
         yield* orchestrator.dispatch(resume);
         yield* orchestrator.dispatch(resume);
@@ -5408,6 +5528,8 @@ it.layer(layerTest)("usage-limit recovery", (it) => {
           scenario === "snooze-resume" ||
           scenario === "wake-preserve-resume" ||
           scenario === "independent-patches" ||
+          scenario === "parent-active" ||
+          scenario === "parent-resume" ||
           scenario === "expired-snooze"
             ? 1
             : 0),
@@ -5420,10 +5542,41 @@ it.layer(layerTest)("usage-limit recovery", (it) => {
           scenario === "snooze-resume" ||
           scenario === "wake-preserve-resume" ||
           scenario === "independent-patches" ||
+          scenario === "parent-active" ||
+          scenario === "parent-resume" ||
           scenario === "expired-snooze"
             ? 1
             : 0),
       );
+      if (hasAncestor && scenario !== "parent-active" && scenario !== "parent-resume") {
+        assert.isTrue(after.thread.limitRecovery?.autoResume);
+        const pendingShell = (yield* orchestrator.getShellSnapshot()).threads.find(
+          (thread) => thread.id === threadId,
+        )!;
+        const pending = limitRecoveryCommand(
+          pendingShell,
+          true,
+          DateTime.toEpochMillis(yield* DateTime.now),
+        );
+        assert.isNotNull(pending);
+        assert.notEqual(pending!.commandId, resume!.commandId);
+        yield* orchestrator.dispatch(pending!);
+        assert.lengthOf((yield* orchestrator.getThreadProjection(threadId)).runs, 1);
+      }
+      if (scenario === "child-user-message") {
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make(`recovery:${scenario}:manual`),
+          messageId: MessageId.make(`recovery:${scenario}:manual`),
+          threadId,
+          text: "Run this explicit request.",
+          attachments: [],
+          dispatchMode: { type: "defer_start" },
+          createdBy: "user",
+          creationSource: "web",
+        });
+        assert.lengthOf((yield* orchestrator.getThreadProjection(threadId)).runs, 2);
+      }
       if (scenario === "queued-resume") {
         assert.equal(after.runs[1]?.status, "queued");
         assert.isTrue(after.runs[1]?.queueHeld);
