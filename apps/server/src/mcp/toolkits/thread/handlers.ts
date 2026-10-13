@@ -105,12 +105,16 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
       // outside a thread searches every project.
       const projectId = requested ?? caller?.projectId;
       const threadSearch = yield* ThreadSearch.ThreadSearch;
-      const result = yield* threadSearch.search(query).pipe(Effect.mapError(unavailable));
+      const limit = Math.min(query.limit ?? 50, 50);
+      const result = yield* threadSearch
+        .search({ ...query, limit })
+        .pipe(Effect.mapError(unavailable));
       return {
         matches:
           projectId === undefined
             ? result.matches
             : result.matches.filter((match) => match.projectId === projectId),
+        ...(query.limit !== undefined && query.limit > limit ? { clampedLimits: { limit } } : {}),
       };
     }),
   ),
@@ -236,13 +240,15 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
       const { projection } = yield* readThread(input.threadId, ["runs", "messages"]);
       const runs = queuedRunsInDeliveryOrder(projection);
       const cursor = input.cursor ?? 0;
-      const end = cursor + (input.limit ?? 20);
+      const limit = Math.min(input.limit ?? 20, 100);
+      const end = cursor + limit;
       return {
         items: runs.slice(cursor, end).flatMap((run) => {
           const entry = queueEntry(projection, run.id, 1000);
           return entry === undefined ? [] : [entry];
         }),
         nextCursor: end < runs.length ? end : null,
+        ...(input.limit !== undefined && input.limit > limit ? { clampedLimits: { limit } } : {}),
       };
     }),
   ),

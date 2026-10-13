@@ -298,7 +298,7 @@ export const OrchestratorMcpThreadListInput = Schema.Struct({
   snoozed: Schema.optional(Schema.Boolean),
   includeSubagents: Schema.optional(Schema.Boolean),
   cursor: Schema.optional(NonNegativeInt),
-  limit: Schema.optional(PositiveInt.check(Schema.isLessThanOrEqualTo(100))),
+  limit: Schema.optional(PositiveInt),
 });
 export type OrchestratorMcpThreadListInput = typeof OrchestratorMcpThreadListInput.Type;
 
@@ -327,6 +327,12 @@ export const OrchestratorMcpThreadListItem = Schema.Struct({
 });
 export type OrchestratorMcpThreadListItem = typeof OrchestratorMcpThreadListItem.Type;
 
+export const OrchestratorMcpReadLimitClamps = Schema.Struct({
+  limit: Schema.optional(PositiveInt),
+  runLimit: Schema.optional(PositiveInt),
+  maxCharsPerItem: Schema.optional(PositiveInt),
+});
+
 export const OrchestratorMcpThreadListResult = Schema.Struct({
   projectId: ProjectId,
   /** The calling thread, or null when the caller is not a T3 thread. */
@@ -334,6 +340,7 @@ export const OrchestratorMcpThreadListResult = Schema.Struct({
   threads: Schema.Array(OrchestratorMcpThreadListItem),
   nextCursor: Schema.NullOr(NonNegativeInt),
   total: NonNegativeInt,
+  clampedLimits: Schema.optional(OrchestratorMcpReadLimitClamps),
 });
 export type OrchestratorMcpThreadListResult = typeof OrchestratorMcpThreadListResult.Type;
 
@@ -343,9 +350,9 @@ export const OrchestratorMcpThreadReadInput = Schema.Struct({
   textOffset: Schema.optional(NonNegativeInt),
   view: Schema.optional(Schema.Literals(["messages", "activity"])),
   afterPosition: Schema.optional(NonNegativeInt),
-  limit: Schema.optional(PositiveInt.check(Schema.isLessThanOrEqualTo(100))),
-  runLimit: Schema.optional(PositiveInt.check(Schema.isLessThanOrEqualTo(50))),
-  maxCharsPerItem: Schema.optional(PositiveInt.check(Schema.isLessThanOrEqualTo(50_000))),
+  limit: Schema.optional(PositiveInt),
+  runLimit: Schema.optional(PositiveInt),
+  maxCharsPerItem: Schema.optional(PositiveInt),
 });
 export type OrchestratorMcpThreadReadInput = typeof OrchestratorMcpThreadReadInput.Type;
 
@@ -420,6 +427,7 @@ export const OrchestratorMcpThreadReadResult = Schema.Struct({
   items: Schema.Array(OrchestratorMcpThreadTimelineItem),
   nextPosition: Schema.NullOr(NonNegativeInt),
   hasMore: Schema.Boolean,
+  clampedLimits: Schema.optional(OrchestratorMcpReadLimitClamps),
 });
 export type OrchestratorMcpThreadReadResult = typeof OrchestratorMcpThreadReadResult.Type;
 

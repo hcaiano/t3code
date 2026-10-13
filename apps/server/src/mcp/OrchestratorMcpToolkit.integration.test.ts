@@ -77,6 +77,7 @@ import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as McpHttpServer from "./McpHttpServer.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
+import { ThreadToolkit } from "./toolkits/thread/tools.ts";
 import { delegatedTaskRun, hasPendingChildRuns } from "./OrchestratorMcpService.ts";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 
@@ -112,6 +113,12 @@ const decodeThreadReadResult = Schema.decodeUnknownEffect(OrchestratorMcpThreadR
 const decodeThreadSendResult = Schema.decodeUnknownEffect(OrchestratorMcpThreadSendResult);
 const decodeThreadWaitResult = Schema.decodeUnknownEffect(OrchestratorMcpThreadWaitResult);
 const decodeThreadUpdateResult = Schema.decodeUnknownEffect(ThreadMetadataMcpUpdateResult);
+const decodeQueueListResult = Schema.decodeUnknownEffect(
+  ThreadToolkit.tools.t3_queue_list.successSchema,
+);
+const decodeThreadSearchResult = Schema.decodeUnknownEffect(
+  ThreadToolkit.tools.t3_thread_search.successSchema,
+);
 
 const codexSelection = {
   instanceId: codexInstanceId,
@@ -691,7 +698,7 @@ describe("orchestrator MCP toolkit", () => {
             Layer.provide(layerProviderRegistry),
             Layer.provide(ServerSettings.layerTest()),
             Layer.provide(layerScheduledTaskStub),
-            Layer.provide(Layer.mock(ThreadSearch.ThreadSearch)({})),
+            Layer.provide(ThreadSearch.layer.pipe(Layer.provide(SqlitePersistence.layerMemory))),
             Layer.provide(
               Layer.mock(ProjectService.ProjectService)({
                 getById: (id) =>
@@ -1441,25 +1448,34 @@ describe("orchestrator MCP toolkit", () => {
             });
             expect(clampedRead.isError).toBe(false);
             expect(clampedRead.structuredContent).toEqual({
-              ...boundedRead.structuredContent,
+              ...(yield* decodeThreadReadResult(boundedRead.structuredContent)),
+              thread: expect.objectContaining({ threadId: parentThreadId }),
               clampedLimits: { limit: 100, runLimit: 50, maxCharsPerItem: 50_000 },
             });
             expect(boundedRead.structuredContent).not.toHaveProperty("clampedLimits");
-            for (const name of ["t3_thread_list", "t3_queue_list"] as const) {
-              const bounded = yield* invoke(name, { limit: 100 });
-              const clamped = yield* invoke(name, { limit: 101 });
-              expect(clamped.isError).toBe(false);
-              expect(clamped.structuredContent).toEqual({
-                ...bounded.structuredContent,
-                clampedLimits: { limit: 100 },
-              });
-              expect(bounded.structuredContent).not.toHaveProperty("clampedLimits");
-            }
+            const boundedList = yield* invoke("t3_thread_list", { limit: 100 });
+            const clampedList = yield* invoke("t3_thread_list", { limit: 101 });
+            expect(clampedList.isError).toBe(false);
+            const boundedThreads = yield* decodeThreadListResult(boundedList.structuredContent);
+            const clampedThreads = yield* decodeThreadListResult(clampedList.structuredContent);
+            expect(clampedThreads.clampedLimits).toEqual({ limit: 100 });
+            expect(clampedThreads.threads.map((thread) => thread.threadId)).toEqual(
+              boundedThreads.threads.map((thread) => thread.threadId),
+            );
+            expect(boundedThreads.clampedLimits).toBeUndefined();
+            const boundedQueue = yield* invoke("t3_queue_list", { limit: 100 });
+            const clampedQueue = yield* invoke("t3_queue_list", { limit: 101 });
+            expect(clampedQueue.isError).toBe(false);
+            expect(clampedQueue.structuredContent).toEqual({
+              ...(yield* decodeQueueListResult(boundedQueue.structuredContent)),
+              clampedLimits: { limit: 100 },
+            });
+            expect(boundedQueue.structuredContent).not.toHaveProperty("clampedLimits");
             const boundedSearch = yield* invoke("t3_thread_search", { query: "task", limit: 50 });
             const clampedSearch = yield* invoke("t3_thread_search", { query: "task", limit: 51 });
             expect(clampedSearch.isError).toBe(false);
             expect(clampedSearch.structuredContent).toEqual({
-              ...boundedSearch.structuredContent,
+              ...(yield* decodeThreadSearchResult(boundedSearch.structuredContent)),
               clampedLimits: { limit: 50 },
             });
             expect(boundedSearch.structuredContent).not.toHaveProperty("clampedLimits");

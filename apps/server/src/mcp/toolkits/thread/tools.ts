@@ -17,6 +17,8 @@ import {
   ThreadId,
   RunId,
   NonNegativeInt,
+  PositiveInt,
+  OrchestratorMcpReadLimitClamps,
   ProjectId,
 } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
@@ -84,11 +86,12 @@ const QueueListTool = Tool.make("t3_queue_list", {
   parameters: Schema.Struct({
     threadId: Schema.optional(ThreadId),
     cursor: Schema.optional(NonNegativeInt),
-    limit: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 100 }))),
+    limit: Schema.optional(PositiveInt),
   }),
   success: Schema.Struct({
     items: Schema.Array(queueEntry),
     nextCursor: Schema.NullOr(NonNegativeInt),
+    clampedLimits: Schema.optional(OrchestratorMcpReadLimitClamps),
   }),
 })
   .annotate(Tool.Readonly, true)
@@ -246,9 +249,13 @@ const ThreadSearchTool = Tool.make("t3_thread_search", {
     "Search active thread titles and content with the app's existing bounded search. Matches are limited to one project (projectId, else the calling thread's project) out of the global top matches, so this may return fewer than limit. A caller outside a T3 thread that omits projectId searches every project. No pagination or exhaustive-result guarantee.",
   parameters: Schema.Struct({
     ...OrchestrationSearchThreadsInput.fields,
+    limit: Schema.optional(PositiveInt),
     projectId: Schema.optional(ProjectId),
   }),
-  success: OrchestrationSearchThreadsResult,
+  success: Schema.Struct({
+    ...OrchestrationSearchThreadsResult.fields,
+    clampedLimits: Schema.optional(OrchestratorMcpReadLimitClamps),
+  }),
   dependencies: [...commandTool.dependencies, ThreadSearch.ThreadSearch],
 })
   .annotate(Tool.Readonly, true)

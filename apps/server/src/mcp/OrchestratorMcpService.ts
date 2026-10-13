@@ -2430,7 +2430,7 @@ const make = Effect.gen(function* () {
               thread.title.toLocaleLowerCase().includes(titleContains),
           );
         const cursor = input.cursor ?? 0;
-        const limit = input.limit ?? DEFAULT_THREAD_LIST_LIMIT;
+        const limit = Math.min(input.limit ?? DEFAULT_THREAD_LIST_LIMIT, 100);
         const page = filtered.slice(cursor, cursor + limit);
         const nextCursor = cursor + page.length < filtered.length ? cursor + page.length : null;
         return {
@@ -2439,6 +2439,7 @@ const make = Effect.gen(function* () {
           threads: page.map((shell) => listItemFromShell(shell, nowMs)),
           nextCursor,
           total: filtered.length,
+          ...(input.limit !== undefined && input.limit > limit ? { clampedLimits: { limit } } : {}),
         } satisfies OrchestratorMcpThreadListResult;
       }),
     readThread: (scope, input) =>
@@ -2446,8 +2447,16 @@ const make = Effect.gen(function* () {
         const { parent, target, shell } = yield* loadReadableThread(scope, input.threadId);
         const view = input.view ?? "messages";
         const afterPosition = input.afterPosition ?? -1;
-        const limit = input.limit ?? DEFAULT_THREAD_READ_LIMIT;
-        const maxChars = input.maxCharsPerItem ?? DEFAULT_THREAD_ITEM_MAX_CHARS;
+        const limit = Math.min(input.limit ?? DEFAULT_THREAD_READ_LIMIT, 100);
+        const runLimit = Math.min(input.runLimit ?? DEFAULT_THREAD_RUN_LIMIT, 50);
+        const maxChars = Math.min(input.maxCharsPerItem ?? DEFAULT_THREAD_ITEM_MAX_CHARS, 50_000);
+        const clampedLimits = {
+          ...(input.limit !== undefined && input.limit > limit ? { limit } : {}),
+          ...(input.runLimit !== undefined && input.runLimit > runLimit ? { runLimit } : {}),
+          ...(input.maxCharsPerItem !== undefined && input.maxCharsPerItem > maxChars
+            ? { maxCharsPerItem: maxChars }
+            : {}),
+        };
         const timeline = yield* threadManagement
           .getTimelinePage(input.threadId, {
             afterPosition,
@@ -2522,7 +2531,7 @@ const make = Effect.gen(function* () {
           thread: threadDetail(target, timeline.totalItems, shell, yield* Clock.currentTimeMillis),
           recentRuns: target.runs
             .toSorted((left, right) => right.ordinal - left.ordinal)
-            .slice(0, input.runLimit ?? DEFAULT_THREAD_RUN_LIMIT)
+            .slice(0, runLimit)
             .map(threadRun),
           items: page.map((row) =>
             timelineItem({
@@ -2534,6 +2543,7 @@ const make = Effect.gen(function* () {
           ),
           nextPosition: page.at(-1)?.position ?? null,
           hasMore: timeline.hasMore,
+          ...(Object.keys(clampedLimits).length > 0 ? { clampedLimits } : {}),
         } satisfies OrchestratorMcpThreadReadResult;
       }),
     sendToThread: (scope, input) =>
